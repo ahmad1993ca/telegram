@@ -6,7 +6,7 @@ require('dotenv').config(); // Load environment variables
 
 // ✅ Load environment variables
 const API_HOST = 'https://gmgn.ai';
-const SOLANA_RPC_URL = 'https://api.devnet.solana.com';
+const SOLANA_RPC_URL = 'https://api.mainnet-beta.solana.com';
 
 // ✅ Telegram Bot Configuration
 const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
@@ -102,7 +102,7 @@ async function swapTokens(amount) {
     bot.sendMessage(chatId, '🔄 Processing trade... Fetching swap details.');
 
     // Fetch Swap Quote
-    const quoteUrl = `${API_HOST}/defi/router/v1/sol/tx/get_swap_route?token_in_address=${INPUT_TOKEN}&token_out_address=${OUTPUT_TOKEN}&in_amount=${amount}&from_address=${fromAddress}&slippage=${SLIPPAGE}`;
+    const quoteUrl = `${API_HOST}/defi/router/v1/sol/tx/get_swap_route?token_in_address=${INPUT_TOKEN}&token_out_address=FetTw8zYm3x962VqHtVvJS2XYA5nMw9TuGXwQDFWpump&in_amount=${amount}&from_address=${fromAddress}&slippage=${SLIPPAGE}`;
     const routeResponse = await fetch(quoteUrl);
     const route = await routeResponse.json();
     console.log('📥 Swap Route:', route);

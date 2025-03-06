@@ -6,7 +6,7 @@ const fetch = require('node-fetch');
 const TelegramBot = require('node-telegram-bot-api');
 const bs58 = require('bs58');
 const OpenAI = require('openai');
-const axios = require("axios");
+// const axios = require("axios");
 
 // ✅ Constants & Configuration
 const API_HOST = 'https://gmgn.ai';
@@ -18,7 +18,7 @@ const dex = 'https://api.dexscreener.com/token-boosts/top/v1'
 
 // ✅ Swap Parameters
 const INPUT_TOKEN = 'So11111111111111111111111111111111111111112'; // SOL
-const SLIPPAGE = 0.5;
+const SLIPPAGE = 2;
 
 // ✅ Load Private Key
 const privateKey = process.env.PRIVATE_KEY;
@@ -198,76 +198,66 @@ const client = new OpenAI({
       // console.log("🤖 Grok 3 says:", response);
       return response;
     } catch (error) {
-      console.error("❌ Error fetching response:", error);
+      // console.error("❌ Error fetching response:", error);
       return null;
     }
   }
 
 
-
+  function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
 
 // Modify getTrendingTokens to include Solana addresses
 async function getTrendingTokens() {
   try {
     const response = await fetch(dex);
     const data = await response.json();
-    
-    data.forEach(async (element) => {
-        // console.log("Fetching token details for:", element.tokenAddress, element.chainId);
-    
-        try {
-            const responses = await fetch(`https://api.dexscreener.com/tokens/v1/${element.chainId}/${element.tokenAddress}`);
-            const tokenData = await responses.json(); // Store parsed JSON
-            
-            // console.log("responses ========>>>>>>", tokenData);
-                // Run the function
-           const intraday = await getGrokResponse(tokenData);
-           if(intraday.recommendation.action == 'BUY'){
-            console.log("🤖 Grok 3 says:", intraday);
-            bot.sendMessage(chatId, `
-              🎯 Best Trading Opportunity Found:
-              Token: ${intraday.recommendation.token}
-              Address: ${intraday.recommendation.address}
-              symbol : ${intraday.recommendation.symbol}
-              
-              🔄 Checking wallet balance...`);
-              
-                    const balance = await checkBalance();
-                    if (balance <= 0) {
-                        bot.sendMessage(chatId, '❌ Insufficient balance to trade!');
-                        return;
-                    }
-              
-                    bot.sendMessage(chatId, '🔄 Please enter the amount you want to trade in SOL:');
-                    bot.on('message', async (msg) => {
-                          const amount = parseFloat(msg.text);
-                          if (isNaN(amount) || amount <= 0) {
-                            bot.sendMessage(chatId, '❌ Invalid amount. Please enter a valid amount to trade.');
-                            return;
-                          }
-                      
-                          if (amount > balance / 1000000000) { // Convert lamports to SOL
-                            bot.sendMessage(chatId, '❌ Insufficient funds for this trade.');
-                            return;
-                          }
-                      
-                          bot.sendMessage(chatId, `💸 You are about to trade ${amount} SOL.`);
-                          console.log("o_token", intraday.recommendation.address);
-                          swapTokens(amount * 1000000000,intraday.recommendation.address); // Convert SOL to lamports
-                        });
-
-           }
-
-            // if (filterSpamTokens(tokenData)) {
-            //     console.log("Valid Token:", tokenData);
-            //     // Process the valid token further
-            // } else {
-            //     console.log("Spam Token Detected and Skipped:");
-            // }
-        } catch (error) {
-            console.error("Error fetching token data:", error);
-        }
-    });
+    data.forEach(async (element,index) => {
+      await sleep(index * 1000);
+      try {
+          const responses = await fetch(`https://api.dexscreener.com/tokens/v1/${element.chainId}/${element.tokenAddress}`);
+          const tokenData = await responses.json();
+          
+          // Get trading recommendation
+          const intraday = await getGrokResponse(tokenData);
+          const balance = await checkBalance();
+  
+          if (balance <= 0) {
+              bot.sendMessage(chatId, '❌ Insufficient balance to trade!');
+              return;
+          }
+  
+          if (intraday.recommendation.action === 'BUY') {
+              console.log("🤖 Grok 3 says:", intraday);
+  
+              bot.sendMessage(chatId, `
+                🎯 Best Trading Opportunity Found:
+                Token: ${intraday.recommendation.token}
+                Address: ${intraday.recommendation.address}
+                Symbol: ${intraday.recommendation.symbol}
+  
+                🔄 Automatically trading 25% of your balance...`);
+  
+              // Automatically calculate 25% of the balance and swap
+              const tradeAmount = 0.0001; // 25% of balance in lamports
+  
+              if (tradeAmount <= 0.00001) {
+                  bot.sendMessage(chatId, '❌ Trade amount is too low.');
+                  return;
+              }
+  
+              bot.sendMessage(chatId, `💸 ${tradeAmount},Trading ${tradeAmount /100000000} SOL...`);
+              console.log("o_token", intraday.recommendation.address);
+  
+             await swapTokens(tradeAmount* 1000000000, intraday.recommendation.address);
+          }
+  
+      } catch (error) {
+          // console.error("Error fetching token data:", error);
+      }
+  });
+  
   } catch (error) {
       console.error('❌ Error fetching trending tokens:', error);
       return [];
@@ -464,7 +454,7 @@ async function checkBalance() {
 async function swapTokens(amount,OUTPUT_TOKEN) {
     try {
       bot.sendMessage(chatId, '🔄 Processing trade... Fetching swap details.');
-  
+      let out='HkCdSYNKCdaQdpzPsaebjerMjy8w681QP2zbCb6e2G8X'
       // Fetch Swap Quote
       const quoteUrl = `${API_HOST}/defi/router/v1/sol/tx/get_swap_route?token_in_address=${INPUT_TOKEN}&token_out_address=${OUTPUT_TOKEN}&in_amount=${amount}&from_address=${fromAddress}&slippage=${SLIPPAGE}`;
       const routeResponse = await fetch(quoteUrl);
