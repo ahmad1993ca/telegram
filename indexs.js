@@ -63,6 +63,8 @@ async function getPurchasedTokens(walletAddress) {
     programId: new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"), // SPL Token Program ID
   });
 
+  console.log("tokenAccounts =====>>",tokenAccounts.value)
+
   // Parse the token accounts to get token details
   const purchasedTokens = [];
 
@@ -74,7 +76,7 @@ async function getPurchasedTokens(walletAddress) {
     if (tokenAmount.uiAmount > 0) {
       purchasedTokens.push({
         mint: accountInfo.value.data.parsed.info.mint, // Token mint address
-        balance: tokenAmount.uiAmount, // Token balance
+        balance: tokenAmount.amount, // Token balance
         owner: accountInfo.value.data.parsed.info.owner, // Wallet address
       });
     }
@@ -240,9 +242,9 @@ async function getTrendingTokens() {
                 🔄 Automatically trading 25% of your balance...`);
   
               // Automatically calculate 25% of the balance and swap
-              const tradeAmount = 0.0001; // 25% of balance in lamports
+              const tradeAmount = 0.00001; // 25% of balance in lamports
   
-              if (tradeAmount <= 0.00001) {
+              if (tradeAmount <= 0) {
                   bot.sendMessage(chatId, '❌ Trade amount is too low.');
                   return;
               }
@@ -373,10 +375,10 @@ async function sendSwapTransaction(swapTransaction) {
 
 // Example usage
 // const fromAddress = "27pKwDJuuzVN9Gd7vqRBA8zAhgnBU5tHJboE4m2b9vaF"; // Your Phantom wallet address
-const tokenIn = "7EYnhQoR9YM3N7UoaKRoA44Uy8JeaZV3qyouov87awMs"; // Token to sell
+const tokenIn = "47b3pp5G7ZQJ15U1nEgRmorUfVTwrotgsFeyfdhgpump"; // Token to sell
 const tokenOut = "So11111111111111111111111111111111111111112"; // Token to receive (SOL)
-const amounts = 5.484927614 * 1e9; // Convert to lamports (adjust for token decimals)
-const slippage = 1; // 1% slippage
+const amounts = 24.76569 * 1e9; // Convert to lamports (adjust for token decimals)
+const slippage = 2; // 1% slippage
 
 
 // Add a command to sell tokens
@@ -389,51 +391,118 @@ bot.onText(/\/sell/, async (msg) => {
     try {
         // First, get the list of tokens in the wallet
         const tokens = await getPurchasedTokens(fromAddress);
+        console.log("tokens ======>>>",tokens)
         
         if (tokens.length === 0) {
             bot.sendMessage(chatId, '❌ No tokens found in your wallet to sell!');
             return;
         }
+        tokens.forEach(async (element,index)=>{
+        await sleep(index * 1000);
 
-        // Display available tokens
-        let message = '🪙 Available tokens to sell:\n\n';
-        tokens.forEach((token, index) => {
-            message += `${index + 1}. Token: ${token.mint}\n`;
-            message += `   Balance: ${token.balance}\n\n`;
-        });
-        message += 'To sell, reply with: <token_number> <amount>\n';
-        message += 'Example: "1 100" to sell 100 tokens of the first token';
+          const responses = await fetch(`https://api.dexscreener.com/tokens/v1/solana/${element.mint}`);
+          const tokensData = await responses.json();
 
-        bot.sendMessage(chatId, message);
+          // Prepare token data for Grok analysis (assuming DEXscreener-like format)
+          const sellForAnalysis = tokensData.map(token => ({
+            name: token.baseToken.address, // Assuming mint is the token identifier
+            symbol: token.baseToken.symbol || "UNKNOWN", // Add symbol if available
+            address: token.baseToken.address,
+            priceChange: {
+                m5: token.priceChange?.m5 || 0, // Placeholder, replace with real data if available
+                h1: token.priceChange?.h1 || 0
+            },
+            volume: {
+                m5: token.volume?.m5 || 0,
+                h1: token.volume?.h1 || 0
+            },
+            liquidity: token.liquidity || 0, // Replace with actual liquidity if available
+            balance: element.balance
+         }));
+         console.log("tokensData=====>>>",sellForAnalysis)
 
-        // Listen for the response
-        bot.once('message', async (response) => {
-            const [tokenIndex, amount] = response.text.split(' ').map(Number);
+         const grokResponse = await getGrokSellResponse(sellForAnalysis);
+         if (!grokResponse || grokResponse.recommendation.action === "HOLD") {
+          bot.sendMessage(chatId, '🔔 No tokens recommended for selling at this time.');
+          return;
+      }
+
+      const { token, symbol, address, action } = grokResponse.recommendation;
+      const reasoning = grokResponse.reasoning;
+      const confidence = grokResponse.confidence;
+
+      if (action !== "SELL") {
+          bot.sendMessage(chatId, '🔔 No strong sell signals detected.');
+          return;
+      }
+
+      // Find the token in the wallet
+      const selectedToken = tokens.find(t => t.mint === address);
+      console.log("selectedToken.balance =================>>",selectedToken.balance)
+
+      const amountToSell = Math.floor(Number(selectedToken.balance) * 0.999); // Sell slightly less than full balance
+ // Use floor to avoid overestimating balance
+      console.log("amountToSell",amountToSell);
+
+      // Notify user of the sale
+      let message = `🛒 Selling ${symbol} (${token})\n`;
+      message += `Amount: ${amountToSell}\n`;
+      message += `Reason: ${reasoning}\n`;
+      message += `Confidence: ${(confidence * 100).toFixed(1)}%`;
+      bot.sendMessage(chatId, message);
+
+      // Execute the sale
+      try {
+          const quote = await sellToken(fromAddress, address, tokenOut, amountToSell, slippage);
+          console.log("Swap Quote:", quote);
+          await sendSwapTransaction(quote.swapTransaction);
+          console.log("Swap transaction sent successfully.");
+          bot.sendMessage(chatId, `✅ Successfully sold ${amountToSell} of ${symbol}!`);
+      } catch (sellError) {
+          console.error("Failed to sell token:", sellError);
+          bot.sendMessage(chatId, '❌ Failed to execute the sale. Please try again.');
+      }
+    })
+       
+        // // Display available tokens
+        // let message = '🪙 Available tokens to sell:\n\n';
+        // tokens.forEach((token, index) => {
+        //     message += `${index + 1}. Token: ${token.mint}\n`;
+        //     message += `   Balance: ${token.balance}\n\n`;
+        // });
+        // message += 'To sell, reply with: <token_number> <amount>\n';
+        // message += 'Example: "1 100" to sell 100 tokens of the first token';
+
+        // bot.sendMessage(chatId, message);
+
+        // // Listen for the response
+        // bot.once('message', async (response) => {
+        //     const [tokenIndex, amount] = response.text.split(' ').map(Number);
             
-            if (isNaN(tokenIndex) || isNaN(amount) || !tokens[tokenIndex - 1]) {
-                bot.sendMessage(chatId, '❌ Invalid input. Please try again with correct format.');
-                return;
-            }
+        //     if (isNaN(tokenIndex) || isNaN(amount) || !tokens[tokenIndex - 1]) {
+        //         bot.sendMessage(chatId, '❌ Invalid input. Please try again with correct format.');
+        //         return;
+        //     }
 
-            const selectedToken = tokens[tokenIndex - 1];
-            if (amount > selectedToken.balance) {
-                bot.sendMessage(chatId, '❌ Insufficient token balance for this sale.');
-                return;
-            }
+        //     const selectedToken = tokens[tokenIndex - 1];
+        //     if (amount > selectedToken.balance) {
+        //         bot.sendMessage(chatId, '❌ Insufficient token balance for this sale.');
+        //         return;
+        //     }
 
             // Execute the sale
             // await sellToken(selectedToken.mint, amount);
             
-            sellToken(fromAddress, tokenIn, tokenOut, amounts, slippage).then((quote) => {
-            console.log("Swap Quote:", quote);
-            return sendSwapTransaction(quote.swapTransaction);
-           }).then(() => {
-            console.log("Swap transaction sent successfully.");
-          })
-          .catch((error) => {
-            console.error("Failed to get swap quote or send transaction:", error);
-          });
-       });
+          //   sellToken(fromAddress, tokenIn, tokenOut, amounts, slippage).then((quote) => {
+          //   console.log("Swap Quote:", quote);
+          //   return sendSwapTransaction(quote.swapTransaction);
+          //  }).then(() => {
+          //   console.log("Swap transaction sent successfully.");
+          // })
+          // .catch((error) => {
+          //   console.error("Failed to get swap quote or send transaction:", error);
+          // });
+      //  });
 
     } catch (error) {
         console.error('Error in sell command:', error);
@@ -441,7 +510,56 @@ bot.onText(/\/sell/, async (msg) => {
     }
 });
 
-
+async function getGrokSellResponse(tokenData) {
+  try {
+    const completion = await client.chat.completions.create({
+      model: "grok-2-latest", // Updated to Grok 3 (hypothetical)
+      messages: [
+        {
+          role: "system",
+          content: "You are Grok 3, a crypto trading analyst built by xAI, optimized for short-term trading insights with real-time data analysis."
+        },
+        {
+          role: "user",
+          content: `
+            As Grok 3, built by xAI, you’re an expert crypto trading analyst deciding whether to sell a token for profit or to exit if the market might drop 10-20% soon, as of March 06, 2025. Analyze these tokens from DEXscreener data:
+            ${JSON.stringify(tokenData, null, 2)}
+            
+            Evaluate each token based on:
+            1. **Short-Term Momentum**: Check priceChange in m5 (+5 min), m10 (if available), and h1 (+1 hour); flag drops below -5% in m5 or -10% in h1 as potential sell signals.
+            2. **Profit Potential**: Favor selling if priceChange h1 > +10% (profit-taking) unless momentum remains strongly positive.
+            3. **Recent Volume**: Assess volume trends (m5 > $500, h1 > $5k); declining volume with negative momentum suggests a sell.
+            4. **Liquidity**: Ensure USD liquidity > $5,000 to execute trades effectively.
+            5. **Sentiment**: Use X/web tools to detect bearish signals or fading hype in the last hour (e.g., panic selling, bad news).
+            
+            Rules:
+            - Sell if short-term metrics suggest a 10-20% drop is likely (e.g., sharp m5/h1 decline + low volume).
+            - Sell for profit if h1 gains > +10% and momentum slows (e.g., volume drops or m5 turns negative).
+            - Hold if momentum is stable/positive and no red flags appear.
+            - Filter out spam (e.g., liquidity < $5k, h1 volume < $5k).
+            - No price forecasts; use current metrics and trends.
+            
+            Output in JSON:
+            {
+              "recommendation": {"token": "name", "symbol": "symbol", "address": "tokenAddress", "action": "SELL" | "HOLD"},
+              "reasoning": "2-3 sentence explanation focusing on short-term metrics",
+              "confidence": "0-1 score (e.g., 0.9 for strong SELL)"
+            }
+            Return the top token action or "HOLD" if no sell signals are clear.
+          `
+        }
+      ],
+      max_tokens: 300, // Shorter response for quick analysis
+      temperature: 0.6 // Slightly more deterministic for trading precision
+    });
+    const response = JSON.parse(completion.choices[0].message.content);
+    // console.log("🤖 Grok 3 says:", response);
+    return response;
+  } catch (error) {
+    // console.error("❌ Error fetching response:", error);
+    return null;
+  }
+}
 
 // ✅ Wallet Balance Check
 async function checkBalance() {
@@ -454,9 +572,10 @@ async function checkBalance() {
 async function swapTokens(amount,OUTPUT_TOKEN) {
     try {
       bot.sendMessage(chatId, '🔄 Processing trade... Fetching swap details.');
-      let out='HkCdSYNKCdaQdpzPsaebjerMjy8w681QP2zbCb6e2G8X'
+      // let out='HkCdSYNKCdaQdpzPsaebjerMjy8w681QP2zbCb6e2G8X'
       // Fetch Swap Quote
       const quoteUrl = `${API_HOST}/defi/router/v1/sol/tx/get_swap_route?token_in_address=${INPUT_TOKEN}&token_out_address=${OUTPUT_TOKEN}&in_amount=${amount}&from_address=${fromAddress}&slippage=${SLIPPAGE}`;
+     console.log("quoteUrl",quoteUrl);
       const routeResponse = await fetch(quoteUrl);
       const route = await routeResponse.json();
       console.log('📥 Swap Route:', route);
