@@ -87,75 +87,158 @@ const client = new OpenAI({
     baseURL: "https://api.x.ai/v1",
 });
 
-  async function getGrokResponse(tokenData) {
-    try {
+async function getGrokResponse(tokenData, userBalance) {
+  try {
       const completion = await client.chat.completions.create({
-        model: "grok-2-latest", // Updated to Grok 3 (hypothetical)
-        messages: [
-          {
-            role: "system",
-            content: "You are Grok 2, a crypto trading analyst built by xAI, optimized for short-term trading insights with real-time data analysis."
-          },
-          {
-            role: "user",
-            content: `
-              As Grok 2, built by xAI, you’re an expert crypto trading analyst identifying the best token to buy for short-term gains as of March 05, 2025. Analyze these tokens from DEXscreener data:
-              ${JSON.stringify(tokenData, null, 2)}
-              
-              Evaluate each token based on:
-              1. **Short-Term Momentum**: Prioritize positive priceChange in m5 (+5 min), m10 (if available), and h1 (+1 hour); flag drops below -20% in any timeframe as risky.
-              2. **Recent Volume**: Favor higher volume in m5, h1 (e.g., m5 > $500, h1 > $5k) for active trading.
-              3. **Liquidity**: Ensure USD liquidity > $5,000 for tradability.
-              4. **Market Cap/FDV**: Minimum $5,000 to avoid microcap scams, prefer growth potential.
-              5. **Sentiment**: Use X/web tools to check for sudden hype or red flags in the last hour.
-              
-              Rules:
-              - Filter out spam (e.g., liquidity < $5k, h1 volume < $5k, or extreme short-term drops).
-              - Focus on m5, h1 trends; ignore 24h unless short-term data is missing.
-              - No price forecasts; use current metrics and momentum.
-              
-              Output in JSON:
+          model: "grok-2-latest", 
+          messages: [
               {
-                "recommendation": {"token": "name", "symbol": "symbol", "address": "tokenAddress", "action": "BUY" | "PASS"},
-                "reasoning": "2-3 sentence explanation focusing on short-term metrics",
-                "confidence": "0-1 score (e.g., 0.9 for strong BUY)"
+                  role: "system",
+                  content: "You are Grok 2, a crypto trading analyst built by xAI, optimized for short-term trading insights with real-time data analysis."
+              },
+              {
+                  role: "user",
+                  content: `
+                  **Trading Strategy**:
+                  - Analyze trending tokens from DEXscreener and filter based on liquidity, momentum, and safety.
+                  - **Suggest an investment percentage** (between 20-50% of available balance).
+                  - **Suggest a sell price** based on a **reasonable profit margin** (e.g., 10-30%).
+
+                  **User Balance**: ${userBalance} SOL
+                  **Token Data**: ${JSON.stringify(tokenData, null, 2)}
+
+                  **Evaluation Rules**:
+                  1️⃣ **Liquidity & Market Safety**:
+                      - ✅ Must have **$10k+ USD liquidity** and **h1 volume > $10k**.
+                      - ❌ Reject if **liquidity < $10k** or **volume too low**.
+
+                  2️⃣ **Momentum Analysis**:
+                      - ✅ **5m & 1h price change must be positive** (>+2% preferred).
+                      - ❌ Reject if **price drops > -20% in any timeframe**.
+
+                  3️⃣ **Security & Scam Detection**:
+                      - ✅ Contract must be **at least 24 hours old**.
+                      - ✅ Reject if **high tax (>10%)**, rug pull signs, or honeypot detected.
+
+                  **Output JSON (Example Format)**:
+                  {
+                      "recommendation": {
+                          "token": "name",
+                          "symbol": "symbol",
+                          "address": "tokenAddress",
+                          "action": "BUY" | "PASS",
+                          "investPercentage": 30,  // % of balance to invest (dynamic)
+                          "sellPrice": 1.10        // Target price (10% profit)
+                      },
+                      "reasoning": "Short explanation...",
+                      "confidence": "0-1 score (e.g., 0.9 for strong BUY)"
+                  }
+                  `
               }
-              Return the top token or "PASS" if none qualify.
-            `
-          }
-        ],
-        max_tokens: 300, // Shorter response for quick analysis
-        temperature: 0.6 // Slightly more deterministic for trading precision
+          ],
+          max_tokens: 300,
+          temperature: 0.6 
       });
+
       const response = JSON.parse(completion.choices[0].message.content);
-      // console.log("🤖 Grok 3 says:", response);
+
+      // ✅ Convert percentage to actual SOL investment
+      if (response.recommendation.action === "BUY") {
+          response.recommendation.investAmount = (userBalance * response.recommendation.investPercentage) / 100;
+      }
+
       return response;
-    } catch (error) {
-      // console.error("❌ Error fetching response:", error);
+  } catch (error) {
+      console.error("❌ Error fetching response:", error);
       return null;
-    }
   }
+}
 
 
   function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+// ✅ Safety Check Function (Filter out risky tokens + Honeypot Check)
+async function isSafeToken(token) {
+  const { baseToken, liquidity, volume, priceChange } = token;
+  
+  // Ensure liquidity & volume are high
+  if (liquidity.usd < 10000 || volume.h1 < 10000) return false;
+  
+  // Avoid tokens with huge drops (-20% in 1h)
+  if (priceChange.h1 < -20) return false;
+
+  // Step 4: Check for Honeypot scams
+  const honeypotCheck = await fetch(`https://api.honeypot.is/v1/check?token=${baseToken.address}`);
+  const honeypotData = await honeypotCheck.json();
+  
+  if (honeypotData.is_honeypot || honeypotData.sellTax > 10) {
+      console.log("❌ Scam detected:", baseToken.address);
+      return false;
+  }
+
+  return true; // Token passes all checks
+}
+
+
+
 // Modify getTrendingTokens to include Solana addresses
 async function getTrendingTokens() {
   try {
-    const response = await fetch(dex);
-    const data = await response.json();
-    data.forEach(async (element,index) => {
+     // Step 1: Fetch trending tokens
+     const trendingResponse = await fetch('https://api.dexscreener.com/token-boosts/top/v1');
+     const trendingData = await trendingResponse.json();
+     
+     if (!trendingData || !trendingData.tokens || trendingData.tokens.length === 0) {
+         bot.sendMessage(chatId, "❌ No trending tokens found!");
+         return;
+     }
+
+     let bestTokens = [];
+
+     for (const token of trendingData.tokens) {
+         const { chainId, address } = token;
+
+         // Step 2: Fetch liquidity & volume data
+         const liquidityUrl = `https://api.dexscreener.com/latest/dex/tokens?minLiquidity=10000&minVolume=10000`;
+         const liquidityResponse = await fetch(liquidityUrl);
+         const liquidityData = await liquidityResponse.json();
+
+         // Find matching token in liquidity list
+         const validToken = liquidityData.pairs.find(pair => 
+             pair.chainId === chainId && pair.baseToken.address === address
+         );
+
+         if (validToken) {
+             // Step 3: Run safety checks (filter out scams)
+             if (isSafeToken(validToken)) {
+                 bestTokens.push(validToken);
+             }
+         }
+     }
+
+     if (bestTokens.length === 0) {
+         bot.sendMessage(chatId, "❌ No safe trading opportunities found.");
+         return;
+     }
+
+     // Step 4: Pick the best token and execute trade
+    //  const bestTrade = bestTokens[0];
+     bestTokens.forEach(async (element,index) => {
       await sleep(index * 1000);
       try {
           const responses = await fetch(`https://api.dexscreener.com/tokens/v1/${element.chainId}/${element.tokenAddress}`);
           const tokenData = await responses.json();
           
           // Get trading recommendation
-          const intraday = await getGrokResponse(tokenData);
           const balance = await checkBalance();
-  
+          if (balance <= 0.0001) {
+            bot.sendMessage(chatId, '❌ Insufficient balance to trade!');
+            return;
+        }
+          const intraday = await getGrokResponse(tokenData,balance);
+          console.log("intraday ========>>",intraday);
           if (balance <= 0) {
               bot.sendMessage(chatId, '❌ Insufficient balance to trade!');
               return;
@@ -183,7 +266,7 @@ async function getTrendingTokens() {
               bot.sendMessage(chatId, `💸 ${tradeAmount},Trading ${tradeAmount /100000000} SOL...`);
               console.log("o_token", intraday.recommendation.address);
   
-             await swapTokens(tradeAmount* 1000000000, intraday.recommendation.address);
+            //  await swapTokens(tradeAmount* 1000000000, intraday.recommendation.address);
           }
   
       } catch (error) {
@@ -282,25 +365,6 @@ async function sellToken(fromAddress, tokenIn, tokenOut, amounts, slippage, buyP
   }
 }
 
-async function sendSwapTransaction(swapTransaction) {
-  const connection = new Connection("https://api.mainnet-beta.solana.com", "confirmed");
-
-  // Convert the swap transaction from base64 to a Transaction object
-  const swapTransactionBuf = Buffer.from(swapTransaction, 'base64');
-  const transaction = VersionedTransaction.deserialize(swapTransactionBuf);
-
-  // Sign the transaction using Phantom wallet
-  const signedTransaction = await window.solana.signTransaction(transaction);
-
-  // Send the signed transaction
-  const signature = await connection.sendRawTransaction(signedTransaction.serialize());
-
-  // Confirm the transaction
-  await connection.confirmTransaction(signature, "confirmed");
-
-  console.log("Transaction successful. Signature:", signature);
-}
-
 // Example usage
 // const fromAddress = "27pKwDJuuzVN9Gd7vqRBA8zAhgnBU5tHJboE4m2b9vaF"; // Your Phantom wallet address
 const tokenIn = "47b3pp5G7ZQJ15U1nEgRmorUfVTwrotgsFeyfdhgpump"; // Token to sell
@@ -365,7 +429,7 @@ async function getGrokSellResponse(tokenData) {
 async function checkBalance() {
   const balance = await connection.getBalance(keypair.publicKey);
   console.log(`✅ Wallet balance: ${balance / 1000000000} SOL`);
-  return balance;
+  return balance / 1000000000;
 }
 
 
@@ -439,41 +503,6 @@ async function swapTokens(amount, OUTPUT_TOKEN) {
   }
 }
 
-
-async function checkTransactionStatus(txid, maxRetries = 10, delayMs = 2000) {
-  try {
-    for (let attempt = 0; attempt < maxRetries; attempt++) {
-      const txStatus = await connection.getTransaction(txid, {
-        commitment: 'confirmed',
-      });
-
-      if (txStatus && txStatus.meta) {
-        if (txStatus.meta.err === null) {
-          console.log(`✅ Transaction ${txid} confirmed!`);
-          bot.sendMessage(chatId, `✅ Transaction ${txid} confirmed!`);
-          return true;
-        } else {
-          console.log(`❌ Transaction ${txid} failed!`);
-          bot.sendMessage(chatId, `❌ Transaction ${txid} failed!`);
-          return false;
-        }
-      }
-
-      console.log(`⏳ Checking transaction status... Attempt ${attempt + 1}/${maxRetries}`);
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
-    }
-
-    console.log(`⚠️ Transaction ${txid} not found or taking too long.`);
-    bot.sendMessage(chatId, `⚠️ Transaction ${txid} not found or taking too long.`);
-    return false;
-  } catch (error) {
-    console.error('❌ Error checking transaction status:', error.message);
-    bot.sendMessage(chatId, `❌ Error checking transaction status: ${error.message}`);
-    return false;
-  }
-}
-
-
 // Add this function to handle automated trading
 async function autoTradeLoop() {
   while (true) {
@@ -488,7 +517,8 @@ async function autoTradeLoop() {
 
           // Check for buy opportunities with timeout
           try {
-            // if(balance > 0.0097)
+            if(balance > 0.001)
+              await getTrendingTokens()
             // await getTrendingTokensWithTimeout(80000); // 10 seconds timeout
           } catch (error) {
             console.error("❌ getTrendingTokens() failed:", error);
@@ -538,7 +568,7 @@ async function autoTradeLoop() {
                             // Fetch the original buy price (store this when purchasing)
                             const buyPrice = selectedToken.buyPrice || 0; // Store this in DB when purchasing
             console.log("fromAddress, address, tokenOut, amountToSell, slippage, buyPrice,", fromAddress, address, tokenOut, amountToSell, slippage, buyPrice,)
-                            const sellResult = await sellToken(fromAddress, address, tokenOut, amountToSell, slippage, buyPrice, chatId);
+                            // const sellResult = await sellToken(fromAddress, address, tokenOut, amountToSell, slippage, buyPrice, chatId);
                             // let sellResult=null;
                             // console.log("sellResult", sellResult);
                             // bot.sendMessage(chatId, `⚠️ sellResult!  ${sellResult}`);
@@ -602,22 +632,6 @@ bot.onText(/\/start/, async (msg) => {
       isAutoTrading = false;
       bot.sendMessage(chatId, '❌ Failed to start auto-trading');
   }
-});
-
-// Add a stop command
-bot.onText(/\/stop/, (msg) => {
-  if (msg.chat.id.toString() !== chatId) {
-      bot.sendMessage(msg.chat.id, '❌ Unauthorized!');
-      return;
-  }
-
-  if (!isAutoTrading) {
-      bot.sendMessage(chatId, '⚠️ Auto-trading is not running!');
-      return;
-  }
-
-  isAutoTrading = false;
-  bot.sendMessage(chatId, '🛑 Auto-trading stopped!');
 });
 
 
