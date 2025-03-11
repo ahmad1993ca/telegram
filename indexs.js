@@ -6,6 +6,7 @@ const fetch = require('node-fetch');
 const TelegramBot = require('node-telegram-bot-api');
 const bs58 = require('bs58');
 const OpenAI = require('openai');
+const { token } = require('@project-serum/anchor/dist/cjs/utils');
 // const axios = require("axios");
 
 // ✅ Constants & Configuration
@@ -13,12 +14,12 @@ const API_HOST = 'https://gmgn.ai';
 const SOLANA_RPC_URL = 'https://api.mainnet-beta.solana.com';
 const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
 const chatId = process.env.CHAT_ID;
-// const DEXSCREENER_API = 'https://api.dexscreener.com/latest/dex/search?q=SOL'; // Update if needed
+const DEXSCREENER_API = 'https://api.dexscreener.com/latest/dex/search?q=SOL'; // Update if needed
 const dex = 'https://api.dexscreener.com/token-boosts/top/v1'
 
 // ✅ Swap Parameters
 const INPUT_TOKEN = 'So11111111111111111111111111111111111111112'; // SOL
-const SLIPPAGE = 1;
+const SLIPPAGE = 2;
 
 // ✅ Load Private Key
 const privateKey = process.env.PRIVATE_KEY;
@@ -50,7 +51,7 @@ async function getPurchasedTokens(walletAddress) {
     programId: new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"), // SPL Token Program ID
   });
 
-  console.log("tokenAccounts =====>>",tokenAccounts.value)
+  // console.log("tokenAccounts =====>>",tokenAccounts.value)
 
   // Parse the token accounts to get token details
   const purchasedTokens = [];
@@ -58,7 +59,7 @@ async function getPurchasedTokens(walletAddress) {
   for (const account of tokenAccounts.value) {
     const accountInfo = await connection.getParsedAccountInfo(account.pubkey);
     const tokenAmount = accountInfo.value.data.parsed.info.tokenAmount;
-     console.log("tokenAmount ===>>",tokenAmount)
+    //  console.log("tokenAmount ===>>",tokenAmount)
     // Only include tokens with a balance greater than 0
     if (tokenAmount.uiAmount > 0) {
       purchasedTokens.push({
@@ -155,128 +156,221 @@ async function getGrokResponse(tokenData, userBalance) {
 }
 
 
-  function sleep(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
-}
+//   function sleep(ms) {
+//     return new Promise(resolve => setTimeout(resolve, ms));
+// }
 
 // ✅ Safety Check Function (Filter out risky tokens + Honeypot Check)
+
 async function isSafeToken(token) {
-  const { baseToken, liquidity, volume, priceChange } = token;
-  
-  // Ensure liquidity & volume are high
-  if (liquidity.usd < 10000 || volume.h1 < 10000) return false;
-  
-  // Avoid tokens with huge drops (-20% in 1h)
-  if (priceChange.h1 < -20) return false;
-
-  // Step 4: Check for Honeypot scams
-  const honeypotCheck = await fetch(`https://api.honeypot.is/v1/check?token=${baseToken.address}`);
-  const honeypotData = await honeypotCheck.json();
-  
-  if (honeypotData.is_honeypot || honeypotData.sellTax > 10) {
-      console.log("❌ Scam detected:", baseToken.address);
-      return false;
+  const { baseToken, liquidity, volume, info } = token;
+   if(liquidity && volume){
+  if (liquidity.usd < 10000 || volume.h1 < 10000) {
+    console.log(`❌ Low liquidity/volume: ${baseToken.address}`);
+    return false;
   }
-
-  return true; // Token passes all checks
 }
 
+  if (token.priceChange?.h1 < -20) {
+    console.log(`❌ Price drop too high: ${baseToken.address}`);
+    return false;
+  }
 
+  try {
+    const honeypotResponse = await fetch(`https://api.honeypot.is/v2/IsHoneypot?address=${baseToken.address}`);
+    const honeypotData = await honeypotResponse.json();
+
+    if (honeypotData.IsHoneypot || honeypotData.SellTax > 10) {
+      console.log(`❌ Honeypot or high tax: ${baseToken.address}`);
+      return false;
+    }
+
+    // Check contract age (GMGN.AI suggests >24h)
+    const creationTime = new Date(info?.creationTime || 0);
+    if (Date.now() - creationTime.getTime() < 24 * 60 * 60 * 1000) {
+      console.log(`❌ Token too new: ${baseToken.address}`);
+      return false;
+    }
+
+    return true;
+  } catch (error) {
+    console.error(`❌ Error checking safety for ${baseToken.address}:`, error);
+    return false;
+  }
+}
 
 // Modify getTrendingTokens to include Solana addresses
-async function getTrendingTokens() {
-  try {
-     // Step 1: Fetch trending tokens
-     const trendingResponse = await fetch('https://api.dexscreener.com/token-boosts/top/v1');
-     const trendingData = await trendingResponse.json();
-     
-     if (!trendingData || !trendingData.tokens || trendingData.tokens.length === 0) {
-         bot.sendMessage(chatId, "❌ No trending tokens found!");
-         return;
-     }
+// async function getTrendingTokens() {
+//   try {
+//     await sleep(20000)
+//     console.log("getTrendingTokens chalu")
+//      // Step 1: Fetch trending tokens
+//      const trendingResponse = await fetch('https://api.dexscreener.com/token-boosts/top/v1');
+//      const trendingData = await trendingResponse.json();
+//       // console.log("trendingData check =>>>>",trendingData);
+//      if (!trendingData || !trendingData || trendingData.length === 0) {
+//          bot.sendMessage(chatId, "❌ No trending tokens found!");
+//          return;
+//      }
 
-     let bestTokens = [];
+//      let bestTokens = [];
 
-     for (const token of trendingData.tokens) {
-         const { chainId, address } = token;
 
-         // Step 2: Fetch liquidity & volume data
-         const liquidityUrl = `https://api.dexscreener.com/latest/dex/tokens?minLiquidity=10000&minVolume=10000`;
-         const liquidityResponse = await fetch(liquidityUrl);
-         const liquidityData = await liquidityResponse.json();
+//      if (trendingData.length === 0) {
+//          bot.sendMessage(chatId, "❌ No safe trading opportunities found.");
+//          return;
+//      }
 
-         // Find matching token in liquidity list
-         const validToken = liquidityData.pairs.find(pair => 
-             pair.chainId === chainId && pair.baseToken.address === address
-         );
+//      // Step 4: Pick the best token and execute trade
+//     //  const bestTrade = bestTokens[0];
+//     trendingData.forEach(async (element,index) => {
+//       await sleep(index * 1000);
+//       try {
+//           const responses = await fetch(`https://api.dexscreener.com/tokens/v1/${element.chainId}/${element.tokenAddress}`);
+//           const tokenData = await responses.json();
+//           // console.log("finl tokenData",tokenData)
+      
+//                    // Step 3: Run safety checks (filter out scams)
+//                    for(const data of tokenData){
+//                    if (isSafeToken(data)) {
+//                     //  console.log("isSafeToken true",data);
+//                        bestTokens.push(data);
+//                    }}
+              
 
-         if (validToken) {
-             // Step 3: Run safety checks (filter out scams)
-             if (isSafeToken(validToken)) {
-                 bestTokens.push(validToken);
-             }
-         }
-     }
+//           // Get trading recommendation
+//           const balance = await checkBalance();
+//           if (balance <= 0.0001) {
+//             bot.sendMessage(chatId, '❌ Insufficient balance to trade!');
+//             return;
+//         }
+//         console.log("bestTokens,balance ",bestTokens,balance)
+//         // return
+//           const intraday = await getGrokResponse(bestTokens,balance);
+//           console.log("intraday ========>>",intraday);
+//           if(intraday == null){
+//             bot.sendMessage(chatId, '❌ no token');
+//             return;
+//           }
+//           if (balance <= 0) {
+//               bot.sendMessage(chatId, '❌ Insufficient balance to trade!');
+//               return;
+//           }
+//           if(intraday.confidence >= '0.8'){
+//           if (intraday.recommendation.action === 'BUY') {
+//               // console.log("🤖 Grok 3 says:", intraday);
+  
+//               bot.sendMessage(chatId, `
+//                 🎯 Best Trading Opportunity Found:
+//                 Token: ${intraday.recommendation.token}
+//                 Address: ${intraday.recommendation.address}
+//                 Symbol: ${intraday.recommendation.symbol}
+//                 confidence: ${intraday.confidence}
 
-     if (bestTokens.length === 0) {
-         bot.sendMessage(chatId, "❌ No safe trading opportunities found.");
-         return;
-     }
+  
+//                 🔄 Automatically trading 25% of your balance...`);
+  
+//               // Automatically calculate 25% of the balance and swap
+//               const tradeAmount = (balance / intraday.recommendation.investPercentage) * 100; // 25% of balance in lamports
+  
+//               if (tradeAmount <= 0) {
+//                   bot.sendMessage(chatId, '❌ Trade amount is too low.');
+//                   return;
+//               }
+  
+//               bot.sendMessage( `💸 ${tradeAmount},Trading ${tradeAmount /100000000} SOL...`);
+//               console.log("o_token", intraday.recommendation.address,tradeAmount);
+  
+//              await swapTokens(Math.round(tradeAmount* 1000000000), intraday.recommendation.address);
+//           }
+//         }else{
+//           bot.sendMessage( '❌ confidence  low !');
+//           return;
+//         }
+  
+//       } catch (error) {
+//           console.error("Error fetching token data:", error);
+//       }
+//   });
+  
+//   } catch (error) {
+//       console.error('❌ Error fetching trending tokens:', error);
+//       return [];
+//   }
+// }
 
-     // Step 4: Pick the best token and execute trade
-    //  const bestTrade = bestTokens[0];
-     bestTokens.forEach(async (element,index) => {
-      await sleep(index * 1000);
-      try {
-          const responses = await fetch(`https://api.dexscreener.com/tokens/v1/${element.chainId}/${element.tokenAddress}`);
-          const tokenData = await responses.json();
-          
-          // Get trading recommendation
-          const balance = await checkBalance();
-          if (balance <= 0.0001) {
-            bot.sendMessage(chatId, '❌ Insufficient balance to trade!');
-            return;
-        }
-          const intraday = await getGrokResponse(tokenData,balance);
-          console.log("intraday ========>>",intraday);
-          if (balance <= 0) {
-              bot.sendMessage(chatId, '❌ Insufficient balance to trade!');
-              return;
-          }
-  
-          if (intraday.recommendation.action === 'BUY') {
-              // console.log("🤖 Grok 3 says:", intraday);
-  
-              bot.sendMessage(chatId, `
-                🎯 Best Trading Opportunity Found:
-                Token: ${intraday.recommendation.token}
-                Address: ${intraday.recommendation.address}
-                Symbol: ${intraday.recommendation.symbol}
-  
-                🔄 Automatically trading 25% of your balance...`);
-  
-              // Automatically calculate 25% of the balance and swap
-              const tradeAmount = 0.00001; // 25% of balance in lamports
-  
-              if (tradeAmount <= 0) {
-                  bot.sendMessage(chatId, '❌ Trade amount is too low.');
-                  return;
-              }
-  
-              bot.sendMessage(chatId, `💸 ${tradeAmount},Trading ${tradeAmount /100000000} SOL...`);
-              console.log("o_token", intraday.recommendation.address);
-  
-            //  await swapTokens(tradeAmount* 1000000000, intraday.recommendation.address);
-          }
-  
-      } catch (error) {
-          // console.error("Error fetching token data:", error);
-      }
-  });
-  
-  } catch (error) {
-      console.error('❌ Error fetching trending tokens:', error);
+async function getTrendingTokens(filters) {
+  try { 
+    console.log("Fetching trending tokens...");
+    const trendingResponse = await fetch('https://api.dexscreener.com/token-boosts/top/v1');
+    const trendingData = await trendingResponse.json();
+  //   const response = await fetch('https://api.dexscreener.com/latest/tokens/solana');
+  // const tokens = await response.json();
+   
+    if (!trendingData || trendingData.length === 0) {
+      bot.sendMessage(chatId, "❌ No trending tokens found!");
       return [];
+    }
+
+    const bestTokens = [];
+    const balance = await checkBalance();
+    if (balance <= 0.0001) {
+      bot.sendMessage(chatId, '❌ Insufficient balance to trade!');
+      return [];
+    }
+
+    for (const [index, element] of trendingData.entries()) {
+      await sleep(index * 1000); // Staggered delay to avoid rate limits
+      try {
+        const response = await fetch(`https://api.dexscreener.com/tokens/v1/${element.chainId}/${element.tokenAddress}`);
+        const tokenData = await response.json();
+        // const finalData= tokenData.filter(t => 
+        //   t.liquidity.usd >= filters.minLiquidity &&
+        //   t.volume.h1 >= filters.minVolumeH1 &&
+        //   (Date.now() - t.createdAt) / 3600000 >= filters.minAgeHours
+        // );
+        // console.log("tokenData",finalData);
+
+        for (const data of tokenData) {
+          if (await isSafeToken(data)) {
+            bestTokens.push(data);
+          }
+        }
+
+        if (bestTokens.length > 0) {
+          const intraday = await getGrokResponse(bestTokens, balance);
+          if (!intraday) {
+            bot.sendMessage(chatId, '❌ No trading recommendation available');
+            continue;
+          }
+
+          console.log("Intraday Recommendation:", intraday);
+          if (intraday.confidence >= 0.8 && intraday.recommendation.action === 'BUY') {
+            bot.sendMessage(chatId, `
+              🎯 Best Trading Opportunity:
+              Token: ${intraday.recommendation.token}
+              Address: ${intraday.recommendation.address}
+              Symbol: ${intraday.recommendation.symbol}
+              Confidence: ${intraday.confidence}
+              🔄 Trading ${intraday.recommendation.investPercentage}% of balance...
+            `);
+
+            const tradeAmount = intraday.recommendation.investAmount * 1e9; // Convert SOL to lamports
+            await swapTokens(Math.round(tradeAmount), intraday.recommendation.address);
+          } else {
+            bot.sendMessage(chatId, '❌ Confidence too low or no BUY signal');
+          }
+        }
+      } catch (error) {
+        console.error(`Error processing token ${element.tokenAddress}:`, error);
+      }
+    }
+
+    return bestTokens;
+  } catch (error) {
+    console.error('❌ Error fetching trending tokens:', error);
+    bot.sendMessage(chatId, '❌ Failed to fetch trending tokens');
+    return [];
   }
 }
 
@@ -300,70 +394,70 @@ bot.onText(/\/trade/, async (msg) => {
   }
 });
 
-async function sellToken(fromAddress, tokenIn, tokenOut, amounts, slippage, buyPrice, chatId) {
-  try {
-      bot.sendMessage(chatId, '🔄 Processing sale... Fetching swap details.');
+// async function sellToken(fromAddress, tokenIn, tokenOut, amounts, slippage, buyPrice, chatId) {
+//   try {
+//       bot.sendMessage(chatId, '🔄 Processing sale... Fetching swap details.');
 
-     const jupiterRouteUrl = `https://api.jup.ag/swap/v1/quote?inputMint=${tokenIn}&outputMint=${tokenOut}&amount=${amounts}&slippageBps=${slippage}&restrictIntermediateTokens=true`;
+//      const jupiterRouteUrl = `https://api.jup.ag/swap/v1/quote?inputMint=${tokenIn}&outputMint=${tokenOut}&amount=${amounts}&slippageBps=${slippage}&restrictIntermediateTokens=true`;
 
-      const jupiterResponse = await fetch(jupiterRouteUrl);
-      const route = await jupiterResponse.json();
-      // console.log('🔄 Jupiter Swap Route:', routes);
+//       const jupiterResponse = await fetch(jupiterRouteUrl);
+//       const route = await jupiterResponse.json();
+//       // console.log('🔄 Jupiter Swap Route:', routes);
 
-      console.log('📥 Swap Route:', route);
+//       console.log('📥 Swap Route:', route);
 
-      if (!route) {
-          throw new Error('Invalid Swap Transaction Data');
-      }
-
-      
-      const swapUrl = `https://api.jup.ag/swap/v1/swap`;
-      const swapResponse = await fetch(swapUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-              userPublicKey: fromAddress, 
-              wrapAndUnwrapSol: true,
-              computeUnitPriceMicroLamports: 5000,
-              quoteResponse: route // The JSON response you got from Jupiter quote API
-          })
-      });
-      const swapData = await swapResponse.json();
-      
-      if (!swapData || !swapData.swapTransaction) {
-          throw new Error('Failed to get swap transaction from Jupiter.');
-      }
-      
-      const transactionBase64 = swapData.swapTransaction
-      const transaction = VersionedTransaction.deserialize(Buffer.from(transactionBase64, 'base64'));
-      console.log(transaction);
-      
-      // transaction.sign([fromAddress]);
-      transaction.sign([keypair]);
-      
-      const transactionBinary = transaction.serialize();
-      console.log(transactionBinary);
-
-
-      const signature = await connection.sendRawTransaction(transactionBinary, {
-        maxRetries: 2,
-        skipPreflight: true
-    });
-
-    const confirmation = await connection.confirmTransaction({signature,}, "finalized");
-    bot.sendMessage(chatId, `🚀 Sending sell transaction... ${confirmation} signature: ${signature}`);
-    if (confirmation.value.err) {
-        throw new Error(`Transaction failed: ${JSON.stringify(confirmation.value.err)}\nhttps://solscan.io/tx/${signature}/`);
-    } else console.log(`Transaction successful: https://solscan.io/tx/${signature}/`);
-
+//       if (!route) {
+//           throw new Error('Invalid Swap Transaction Data');
+//       }
 
       
-  } catch (error) {
-      console.error('❌ Error during token sale:', error.message);
-      bot.sendMessage(chatId, `❌ Error: ${error.message}`);
-      return { success: false };
-  }
-}
+//       const swapUrl = `https://api.jup.ag/swap/v1/swap`;
+//       const swapResponse = await fetch(swapUrl, {
+//           method: 'POST',
+//           headers: { 'Content-Type': 'application/json' },
+//           body: JSON.stringify({
+//               userPublicKey: fromAddress, 
+//               wrapAndUnwrapSol: true,
+//               computeUnitPriceMicroLamports: 5000,
+//               quoteResponse: route // The JSON response you got from Jupiter quote API
+//           })
+//       });
+//       const swapData = await swapResponse.json();
+      
+//       if (!swapData || !swapData.swapTransaction) {
+//           throw new Error('Failed to get swap transaction from Jupiter.');
+//       }
+      
+//       const transactionBase64 = swapData.swapTransaction
+//       const transaction = VersionedTransaction.deserialize(Buffer.from(transactionBase64, 'base64'));
+//       console.log("transaction",transaction);
+      
+//       // transaction.sign([fromAddress]);
+//       transaction.sign([keypair]);
+      
+//       const transactionBinary = transaction.serialize();
+//       console.log("transactionBinary",transactionBinary);
+
+
+//       const signature = await connection.sendRawTransaction(transactionBinary, {
+//         maxRetries: 2,
+//         skipPreflight: true
+//     });
+
+//     const confirmation = await connection.confirmTransaction({signature,}, "finalized");
+//     bot.sendMessage(chatId, `🚀 Sending sell transaction... ${confirmation} signature: ${signature}`);
+//     if (confirmation.value.err) {
+//         throw new Error(`Transaction failed: ${JSON.stringify(confirmation.value.err)}\nhttps://solscan.io/tx/${signature}/`);
+//     } else console.log(`Transaction successful: https://solscan.io/tx/${signature}/`);
+
+
+      
+//   } catch (error) {
+//       console.error('❌ Error during token sale:', error.message);
+//       bot.sendMessage(chatId, `❌ Error: ${error.message}`);
+//       return { success: false };
+//   }
+// }
 
 // Example usage
 // const fromAddress = "27pKwDJuuzVN9Gd7vqRBA8zAhgnBU5tHJboE4m2b9vaF"; // Your Phantom wallet address
@@ -434,170 +528,143 @@ async function checkBalance() {
 
 
 
-async function swapTokens(amount, OUTPUT_TOKEN) {
+// async function swapTokens(amount, OUTPUT_TOKEN) {
+//   try {
+    
+//       bot.sendMessage(chatId, '🔄 Processing trade... Fetching swap details.',amount);
+
+//       // Step 1: Fetch Swap Quote
+//       const quoteUrl = `https://api.jup.ag/swap/v1/quote?inputMint=${INPUT_TOKEN}&outputMint=${OUTPUT_TOKEN}&amount=${amount}&slippageBps=${SLIPPAGE}`;
+//       console.log("quoteUrl:", quoteUrl);
+
+//       const quoteResponse = await fetch(quoteUrl);
+//       const quote = await quoteResponse.json();
+//       console.log('📥 Swap Quote:', quote);
+
+//       if (!quote || !quote.routePlan || quote.routePlan.length === 0) {
+//           throw new Error("No available route for the given token pair.");
+//       }
+
+//       // Step 2: Execute Swap Transaction using Jupiter `/swap`
+//       const swapUrl = `https://api.jup.ag/swap/v1/swap`;
+//       const swapResponse = await fetch(swapUrl, {
+//           method: 'POST',
+//           headers: { 'Content-Type': 'application/json' },
+//           body: JSON.stringify({
+//               userPublicKey: fromAddress,
+//               wrapAndUnwrapSol: true,
+//               computeUnitPriceMicroLamports: 5000,
+//               quoteResponse: quote // Send the entire quote response
+//           })
+//       });
+
+//       const swapData = await swapResponse.json();
+//       console.log("🔄 Swap Data:", swapData);
+
+//       if (!swapData || !swapData.swapTransaction) {
+//           throw new Error('Failed to get swap transaction from Jupiter.');
+//       }
+
+//       // Step 3: Deserialize, Sign, and Send Transaction
+//       const transactionBase64 = swapData.swapTransaction;
+//       const transaction = VersionedTransaction.deserialize(Buffer.from(transactionBase64, 'base64'));
+//       console.log("🔄 Parsed Transaction:", transaction);
+
+//       // Sign transaction using your keypair
+//       transaction.sign([keypair]);
+
+//       const transactionBinary = transaction.serialize();
+//       console.log("🔄 Serialized Transaction:", transactionBinary);
+
+//       // Submit Transaction to Solana Network
+//       const signature = await connection.sendRawTransaction(transactionBinary, {
+//           maxRetries: 2,
+//           skipPreflight: true
+//       });
+
+//       // Step 4: Confirm Transaction
+//       const confirmation = await connection.confirmTransaction(signature, "finalized");
+//       console.log(`✅ Transaction successful: https://solscan.io/tx/${signature}/`);
+
+//       bot.sendMessage(chatId, `🚀 Transaction sent successfully! Tx Hash: ${signature}`);
+
+//       if (confirmation.value.err) {
+//           throw new Error(`Transaction failed: ${JSON.stringify(confirmation.value.err)}\nhttps://solscan.io/tx/${signature}/`);
+//       }
+//       await sleep(10000)
+//   } catch (error) {
+//       console.error("❌ Error during swap:", error.message);
+//       bot.sendMessage(chatId, `❌ Error: ${error.message}`);
+//   }
+// }
+
+// Add this function to handle automated trading
+
+async function swapTokens(amount, outputToken, isSell = false) {
+  const action = isSell ? "Selling" : "Buying";
+
   try {
-      bot.sendMessage(chatId, '🔄 Processing trade... Fetching swap details.');
+    bot.sendMessage(chatId, `🔄 ${action} token... Fetching swap details`);
+    let quoteUrl
+    // const quoteUrl = `https://api.jup.ag/swap/v1/quote?inputMint=${isSell ? outputToken : INPUT_TOKEN}&outputMint=${isSell ? tokenOut : outputToken}&amount=${amount}&slippageBps=${SLIPPAGE}`;
+    if(!isSell){
+      quoteUrl = `https://api.jup.ag/swap/v1/quote?inputMint=${INPUT_TOKEN}&outputMint=${outputToken}&amount=${amount}&slippageBps=${SLIPPAGE}`;
+    }else{
+      console.log("sell is colling")
+     quoteUrl = `https://api.jup.ag/swap/v1/quote?inputMint=${outputToken}&outputMint=${INPUT_TOKEN}&amount=${amount}&slippageBps=${SLIPPAGE}`;
+    }
+   
+    console.log("quoteUrl ===>>",quoteUrl);
+    const quoteResponse = await fetch(quoteUrl);
+    const quote = await quoteResponse.json();
 
-      // Step 1: Fetch Swap Quote
-      const quoteUrl = `https://api.jup.ag/swap/v1/quote?inputMint=${INPUT_TOKEN}&outputMint=${OUTPUT_TOKEN}&amount=${amount}&slippageBps=${SLIPPAGE}`;
-      console.log("quoteUrl:", quoteUrl);
+    if (!quote || !quote.routePlan) {
+      throw new Error("No swap route available");
+    }
 
-      const quoteResponse = await fetch(quoteUrl);
-      const quote = await quoteResponse.json();
-      console.log('📥 Swap Quote:', quote);
+    const swapResponse = await fetch('https://api.jup.ag/swap/v1/swap', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userPublicKey: fromAddress,
+        wrapAndUnwrapSol: true,
+        computeUnitPriceMicroLamports: 5000,
+        quoteResponse: quote
+      })
+    });
 
-      if (!quote || !quote.routePlan || quote.routePlan.length === 0) {
-          throw new Error("No available route for the given token pair.");
-      }
+    const swapData = await swapResponse.json();
+    console.log("🔄 Swap Data:", swapData) ;
+    if (!swapData?.swapTransaction) {
+      throw new Error('Failed to get swap transaction');
+    }
 
-      // Step 2: Execute Swap Transaction using Jupiter `/swap`
-      const swapUrl = `https://api.jup.ag/swap/v1/swap`;
-      const swapResponse = await fetch(swapUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-              userPublicKey: fromAddress,
-              wrapAndUnwrapSol: true,
-              computeUnitPriceMicroLamports: 5000,
-              quoteResponse: quote // Send the entire quote response
-          })
-      });
+    const transaction = VersionedTransaction.deserialize(Buffer.from(swapData.swapTransaction, 'base64'));
+    transaction.sign([keypair]);
 
-      const swapData = await swapResponse.json();
-      console.log("🔄 Swap Data:", swapData);
+    const signature = await connection.sendRawTransaction(transaction.serialize(), {
+      maxRetries: 2,
+      skipPreflight: true
+    });
 
-      if (!swapData || !swapData.swapTransaction) {
-          throw new Error('Failed to get swap transaction from Jupiter.');
-      }
+    const confirmation = await connection.confirmTransaction({ signature }, "finalized");
+    if (confirmation.value.err) {
+      throw new Error(`Transaction failed: ${JSON.stringify(confirmation.value.err)}`);
+    }
 
-      // Step 3: Deserialize, Sign, and Send Transaction
-      const transactionBase64 = swapData.swapTransaction;
-      const transaction = VersionedTransaction.deserialize(Buffer.from(transactionBase64, 'base64'));
-      console.log("🔄 Parsed Transaction:", transaction);
-
-      // Sign transaction using your keypair
-      transaction.sign([keypair]);
-
-      const transactionBinary = transaction.serialize();
-      console.log("🔄 Serialized Transaction:", transactionBinary);
-
-      // Submit Transaction to Solana Network
-      const signature = await connection.sendRawTransaction(transactionBinary, {
-          maxRetries: 2,
-          skipPreflight: true
-      });
-
-      // Step 4: Confirm Transaction
-      const confirmation = await connection.confirmTransaction(signature, "finalized");
-      console.log(`✅ Transaction successful: https://solscan.io/tx/${signature}/`);
-
-      bot.sendMessage(chatId, `🚀 Transaction sent successfully! Tx Hash: ${signature}`);
-
-      if (confirmation.value.err) {
-          throw new Error(`Transaction failed: ${JSON.stringify(confirmation.value.err)}\nhttps://solscan.io/tx/${signature}/`);
-      }
-
+    bot.sendMessage(chatId, `✅ ${action} successful! Tx: https://solscan.io/tx/${signature}`);
+    return signature;
   } catch (error) {
-      console.error("❌ Error during swap:", error.message);
-      bot.sendMessage(chatId, `❌ Error: ${error.message}`);
+    console.error(`❌ Error during ${isSell ? 'sell' : 'swap'}:`, error.message);
+    bot.sendMessage(chatId, `❌ ${action} failed: ${error.message}`);
+    throw error;
   }
 }
 
-// Add this function to handle automated trading
-async function autoTradeLoop() {
-  while (true) {
-      try {
-          // Check balance first
-          const balance = await checkBalance();
-          if (balance <= 0) {
-              console.log('❌ Insufficient balance for trading');
-              await sleep(60000); // Wait 1 minute before next check
-              continue;
-          }
-
-          // Check for buy opportunities with timeout
-          try {
-            if(balance > 0.001)
-              await getTrendingTokens()
-            // await getTrendingTokensWithTimeout(80000); // 10 seconds timeout
-          } catch (error) {
-            console.error("❌ getTrendingTokens() failed:", error);
-          }
-
-          // Check for sell opportunities
-          const tokens = await getPurchasedTokens(fromAddress);
-            console.log("tokens  ===>>>",tokens)
-          if (tokens.length > 0) {
-            for (const element of tokens) {
-                // await sleep(50000); // 1 second delay between tokens
-
-                console.log("element", element);
-                try {
-                    const responses = await fetch(`https://api.dexscreener.com/tokens/v1/solana/${element.mint}`);
-                    const tokensData = await responses.json();
-        
-                    const sellForAnalysis = tokensData.map(token => ({
-                        name: token.baseToken.address,
-                        symbol: token.baseToken.symbol || "UNKNOWN",
-                        address: token.baseToken.address,
-                        priceChange: {
-                            m5: token.priceChange?.m5 || 0,
-                            h1: token.priceChange?.h1 || 0
-                        },
-                        volume: {
-                            m5: token.volume?.m5 || 0,
-                            h1: token.volume?.h1 || 0
-                        },
-                        liquidity: token.liquidity || 0,
-                        balance: element.balance
-                    }));
-        
-                    // console.log("sellForAnalysis", sellForAnalysis);
-                    const grokResponse = await getGrokSellResponse(sellForAnalysis);
-                    console.log("grokResponse ===>>>", grokResponse);  
-                    // return
-                    if (grokResponse && grokResponse.recommendation.action === "SELL") {
-                        const { token, symbol, address } = grokResponse.recommendation;
-                        const selectedToken = tokens.find(t => t.mint === address);
-                        
-                        if (selectedToken) {
-                            // const amountToSell = Math.floor(Number(selectedToken.balance) * 0.999);
-                            const amountToSell = Math.max(1, Math.floor(Number(selectedToken.balance) * 0.999));
-
-                            
-                            // Fetch the original buy price (store this when purchasing)
-                            const buyPrice = selectedToken.buyPrice || 0; // Store this in DB when purchasing
-            console.log("fromAddress, address, tokenOut, amountToSell, slippage, buyPrice,", fromAddress, address, tokenOut, amountToSell, slippage, buyPrice,)
-                            // const sellResult = await sellToken(fromAddress, address, tokenOut, amountToSell, slippage, buyPrice, chatId);
-                            // let sellResult=null;
-                            // console.log("sellResult", sellResult);
-                            // bot.sendMessage(chatId, `⚠️ sellResult!  ${sellResult}`);
-
-                            
-                        }
-                    }else {
-                    console.log("grokResponse should be", grokResponse);
-
-                    }
-                } catch (error) {
-                    console.error(`Error processing token ${element.mint}:`, error);
-                }
-                await sleep(1000); // 1 second delay between tokens
-            }
-        }
-        
-         else {
-          bot.sendMessage(chatId, '❌ Noting for sell');
-
-          }
-
-          // Wait 5 minutes before next iteration
-          // await sleep(300000);
-      } catch (error) {
-          console.error('Error in auto trade loop:', error);
-          await sleep(1000); // Wait 1 minute on error
-      }
-  }
+// Update sellToken to use swapTokens
+async function sellToken(fromAddress, tokenIn, tokenOut, amount, slippage, buyPrice, chatId) {
+  console.log(`Attempting to sell ${amount} of ${tokenIn} for ${tokenOut}`);
+  return await swapTokens(amount, tokenIn, true);
 }
 
 // Add a flag to track if auto-trading is running
@@ -607,32 +674,135 @@ let autoTradeInterval;
 // Modify the start command handler
 bot.onText(/\/start/, async (msg) => {
   if (msg.chat.id.toString() !== chatId) {
-      bot.sendMessage(msg.chat.id, '❌ Unauthorized! You are not allowed to trade.');
-      return;
+    bot.sendMessage(msg.chat.id, '❌ Unauthorized! You are not allowed to trade.');
+    return;
   }
 
   if (isAutoTrading) {
-      bot.sendMessage(chatId, '⚠️ Auto-trading is already running!');
-      return;
+    bot.sendMessage(chatId, '⚠️ Auto-trading is already running!');
+    return;
   }
 
   try {
-      isAutoTrading = true;
-      bot.sendMessage(chatId, '🤖 Starting 24/7 auto-trading bot...');
-      
-      // Start the auto-trading loop
-      autoTradeLoop().catch(error => {
-          console.error('Auto-trading loop error:', error);
-          isAutoTrading = false;
-          bot.sendMessage(chatId, '❌ Auto-trading stopped due to an error!');
-      });
-
-  } catch (error) {
-      console.error('Error starting auto-trade:', error);
+    isAutoTrading = true;
+    bot.sendMessage(chatId, '🤖 Starting 24/7 auto-trading bot...');
+    
+    // Start parallel buy and sell loops
+    Promise.all([autoBuyLoop(), autoSellLoop()]).catch(error => {
+      console.error('Auto-trading failed:', error);
       isAutoTrading = false;
-      bot.sendMessage(chatId, '❌ Failed to start auto-trading');
+      bot.sendMessage(chatId, '❌ Auto-trading stopped due to an error!');
+    });
+  } catch (error) {
+    console.error('Error starting auto-trade:', error);
+    isAutoTrading = false;
+    bot.sendMessage(chatId, '❌ Failed to start auto-trading');
   }
 });
+
+// Sleep utility
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+// Buy loop
+async function autoBuyLoop() {
+  while (isAutoTrading) {
+    try {
+      const balance = await checkBalance();
+      if (balance <= 0.001) {
+        console.log('ℹ️ Insufficient balance for buying');
+        await sleep(30000); // Check every 30 seconds
+        continue;
+      }
+
+      // Buy trending tokens with filters
+      await getTrendingTokens({
+        minLiquidity: 10000, // $10k minimum liquidity
+        minVolumeH1: 5000,   // $5k volume in last hour
+        minAgeHours: 24      // Token must be at least 1 day old
+      });
+
+      await sleep(30000); // Buy every 30 seconds
+    } catch (error) {
+      console.error('Buy loop error:', error);
+      bot.sendMessage(chatId, '⚠️ Buy loop paused due to error');
+      await sleep(60000); // Wait 1 minute on error
+    }
+  }
+}
+
+// Sell loop
+async function autoSellLoop() {
+  while (isAutoTrading) {
+    try {
+      const tokens = await getPurchasedTokens(fromAddress);
+      if (!tokens.length) {
+        bot.sendMessage(chatId, 'ℹ️ No tokens to sell');
+        await sleep(30000);
+        continue;
+      }
+
+      // Parallelize sell operations
+      await Promise.all(tokens.map(async (token) => {
+        try {
+          const response = await fetch(`https://api.dexscreener.com/tokens/v1/solana/${token.mint}`);
+          const tokenData = await response.json();
+          const sellData = tokenData.map(t => ({
+            name: t.baseToken.name || "Unknown",
+            symbol: t.baseToken.symbol || "UNKNOWN",
+            address: t.baseToken.address,
+            priceChange: { m5: t.priceChange?.m5 || 0, h1: t.priceChange?.h1 || 0 },
+            volume: { m5: t.volume?.m5 || 0, h1: t.volume?.h1 || 0 },
+            liquidity: t.liquidity || { usd: 0 },
+            balance: token.balance
+          }));
+
+          const grokResponse = await getGrokSellResponse(sellData);
+          if (grokResponse?.recommendation?.action === "SELL") {
+            const amountToSell = Math.max(1, Math.floor(Number(token.balance) * 0.999));
+            await sellWithRetry(
+              fromAddress,
+              grokResponse.recommendation.address,
+              tokenOut,
+              amountToSell,
+              slippage,
+              chatId
+            );
+            bot.sendMessage(chatId, `💰 Sold ${grokResponse.recommendation.symbol}`);
+          }
+        } catch (error) {
+          console.error(`Error processing sell for ${token.mint}:`, error);
+        }
+      }));
+
+      await sleep(30000); // Sell check every 30 seconds
+    } catch (error) {
+      console.error('Sell loop error:', error);
+      bot.sendMessage(chatId, '⚠️ Sell loop paused due to error');
+      await sleep(60000); // Wait 1 minute on error
+    }
+  }
+}
+
+// Sell with retry logic
+async function sellWithRetry(fromAddress, tokenAddress, tokenOut, amount, slippage, chatId, retries = 3) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      await sellToken(fromAddress, tokenAddress, tokenOut, amount, slippage, 0, chatId);
+      return; // Success, exit retry loop
+    } catch (error) {
+      console.error(`Sell attempt ${attempt} failed for ${tokenAddress}:`, error);
+      if (attempt === retries) {
+        bot.sendMessage(chatId, `❌ Failed to sell ${tokenAddress} after ${retries} attempts`);
+        throw error; // Final failure
+      }
+      const adjustedSlippage = slippage + (attempt * 50); // Increase slippage dynamically
+      await sleep(5000 * attempt); // Exponential backoff: 5s, 10s, 15s
+      console.log(`Retrying sell with slippage ${adjustedSlippage}...`);
+      slippage = adjustedSlippage;
+    }
+  }
+}
+
 
 
 // ✅ Telegram Bot Ready
