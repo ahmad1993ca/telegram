@@ -19,7 +19,7 @@ const dex = 'https://api.dexscreener.com/token-boosts/top/v1'
 
 // ✅ Swap Parameters
 const INPUT_TOKEN = 'So11111111111111111111111111111111111111112'; // SOL
-const SLIPPAGE = 2;
+const SLIPPAGE = 100;
 
 // ✅ Load Private Key
 const privateKey = process.env.PRIVATE_KEY;
@@ -59,9 +59,9 @@ async function getPurchasedTokens(walletAddress) {
   for (const account of tokenAccounts.value) {
     const accountInfo = await connection.getParsedAccountInfo(account.pubkey);
     const tokenAmount = accountInfo.value.data.parsed.info.tokenAmount;
-    //  console.log("tokenAmount ===>>",tokenAmount)
+     console.log("tokenAmount ===>>",tokenAmount,tokenAmount.uiAmount > 0.00001)
     // Only include tokens with a balance greater than 0
-    if (tokenAmount.uiAmount > 0) {
+    if (tokenAmount.uiAmount > 0.00001) {
       purchasedTokens.push({
         mint: accountInfo.value.data.parsed.info.mint, // Token mint address
         balance: tokenAmount.amount, // Token balance
@@ -165,7 +165,7 @@ async function getGrokResponse(tokenData, userBalance) {
 async function isSafeToken(token) {
   const { baseToken, liquidity, volume, info } = token;
    if(liquidity && volume){
-  if (liquidity.usd < 10000 || volume.h1 < 10000) {
+  if (liquidity.usd < 5000 || volume.h1 < 5000) {
     console.log(`❌ Low liquidity/volume: ${baseToken.address}`);
     return false;
   }
@@ -303,27 +303,29 @@ async function getTrendingTokens(filters) {
   try { 
     console.log("Fetching trending tokens...");
     const trendingResponse = await fetch('https://api.dexscreener.com/token-boosts/top/v1');
+    // const trendingResponse = await fetch('https://api.dexscreener.com/token-profiles/latest/v1')
     const trendingData = await trendingResponse.json();
-  //   const response = await fetch('https://api.dexscreener.com/latest/tokens/solana');
-  // const tokens = await response.json();
-   
-    if (!trendingData || trendingData.length === 0) {
+    
+  const solanaTokens = trendingData.filter(token => token.chainId === "solana");
+  console.log("solanaTokens ===>>",solanaTokens)
+    if (!solanaTokens || solanaTokens.length === 0) {
       bot.sendMessage(chatId, "❌ No trending tokens found!");
       return [];
     }
 
     const bestTokens = [];
     const balance = await checkBalance();
-    if (balance <= 0.0001) {
+    if (balance <= 0.001) {
       bot.sendMessage(chatId, '❌ Insufficient balance to trade!');
       return [];
     }
 
-    for (const [index, element] of trendingData.entries()) {
+    for (const [index, element] of solanaTokens.entries()) {
       await sleep(index * 1000); // Staggered delay to avoid rate limits
       try {
         const response = await fetch(`https://api.dexscreener.com/tokens/v1/${element.chainId}/${element.tokenAddress}`);
         const tokenData = await response.json();
+       
         // const finalData= tokenData.filter(t => 
         //   t.liquidity.usd >= filters.minLiquidity &&
         //   t.volume.h1 >= filters.minVolumeH1 &&
@@ -468,50 +470,100 @@ const slippage = 2; // 1% slippage
 
 
 
+// async function getGrokSellResponse(tokenData) {
+//   try {
+//     const completion = await client.chat.completions.create({
+//       model: "grok-2-latest", // Updated to Grok 3 (hypothetical)
+//       messages: [
+//         {
+//           role: "system",
+//           content: "You are Grok 3, a crypto trading analyst built by xAI, optimized for short-term trading insights with real-time data analysis."
+//         },
+//         {
+//           role: "user",
+//           content: `
+//             As Grok 3, built by xAI, you’re an expert crypto trading analyst deciding whether to sell a token for profit or to exit if the market might drop 10-20% soon, as of March 06, 2025. Analyze these tokens from DEXscreener data:
+//             ${JSON.stringify(tokenData, null, 2)}
+            
+//             Evaluate each token based on:
+//             1. **Short-Term Momentum**: Check priceChange in m12 (+12 min), m10 (if available), and h1 (+1 hour); flag drops below -5% in m5 or -10% in h1 as potential sell signals.
+//             2. **Profit Potential**: Favor selling if priceChange h1 > +10% (profit-taking) unless momentum remains strongly positive.
+//             3. **Recent Volume**: Assess volume trends (m5 > $500, h1 > $5k); declining volume with negative momentum suggests a sell.
+//             4. **Liquidity**: Ensure USD liquidity > $5,000 to execute trades effectively.
+//             5. **Sentiment**: Use X/web tools to detect bearish signals or fading hype in the last hour (e.g., panic selling, bad news).
+            
+//             Rules:
+//             - Sell if short-term metrics suggest a 10-20% drop is likely (e.g., sharp m12/h1 decline + low volume).
+//             - Sell for profit if h1 gains > +10% and momentum slows (e.g., volume drops or m5 turns negative).
+//             - Hold if momentum is stable/positive and no red flags appear.
+//             - Filter out spam (e.g., liquidity < $5k, h1 volume < $5k).
+//             - No price forecasts; use current metrics and trends.
+            
+//             Output in JSON:
+//             {
+//               "recommendation": {"token": "name", "symbol": "symbol", "address": "tokenAddress", "action": "SELL" | "HOLD"},
+//               "reasoning": "2-3 sentence explanation focusing on short-term metrics",
+//               "confidence": "0-1 score (e.g., 0.9 for strong SELL)"
+//             }
+//             Return the top token action or "HOLD" if no sell signals are clear.
+//           `
+//         }
+//       ],
+//       max_tokens: 300, // Shorter response for quick analysis
+//       temperature: 0.6 // Slightly more deterministic for trading precision
+//     });
+//     const response = JSON.parse(completion.choices[0].message.content);
+//     // console.log("🤖 Grok 3 says:", response);
+//     return response;
+//   } catch (error) {
+//     console.error("❌ Error fetching response:", error);
+//     return null;
+//   }
+// }
+
+// ✅ Wallet Balance Check
+
 async function getGrokSellResponse(tokenData) {
   try {
     const completion = await client.chat.completions.create({
-      model: "grok-2-latest", // Updated to Grok 3 (hypothetical)
+      model: "grok-2-latest",
       messages: [
         {
           role: "system",
-          content: "You are Grok 3, a crypto trading analyst built by xAI, optimized for short-term trading insights with real-time data analysis."
+          content: "You are Grok 3, a crypto trading analyst built by xAI, optimized for short-term trading insights with real-time data analysis, focusing on 2-10% profit after fees while minimizing premature exits."
         },
         {
           role: "user",
           content: `
-            As Grok 3, built by xAI, you’re an expert crypto trading analyst deciding whether to sell a token for profit or to exit if the market might drop 10-20% soon, as of March 06, 2025. Analyze these tokens from DEXscreener data:
+            As Grok 3, built by xAI, you’re an expert crypto trading analyst deciding whether to sell a token for profit or hold, exiting only if a 5% drop is imminent, as of March 12, 2025. Analyze these tokens from DEXscreener data:
             ${JSON.stringify(tokenData, null, 2)}
-            
-            Evaluate each token based on:
-            1. **Short-Term Momentum**: Check priceChange in m12 (+12 min), m10 (if available), and h1 (+1 hour); flag drops below -5% in m5 or -10% in h1 as potential sell signals.
-            2. **Profit Potential**: Favor selling if priceChange h1 > +10% (profit-taking) unless momentum remains strongly positive.
-            3. **Recent Volume**: Assess volume trends (m5 > $500, h1 > $5k); declining volume with negative momentum suggests a sell.
-            4. **Liquidity**: Ensure USD liquidity > $5,000 to execute trades effectively.
-            5. **Sentiment**: Use X/web tools to detect bearish signals or fading hype in the last hour (e.g., panic selling, bad news).
-            
-            Rules:
-            - Sell if short-term metrics suggest a 10-20% drop is likely (e.g., sharp m12/h1 decline + low volume).
-            - Sell for profit if h1 gains > +10% and momentum slows (e.g., volume drops or m5 turns negative).
-            - Hold if momentum is stable/positive and no red flags appear.
-            - Filter out spam (e.g., liquidity < $5k, h1 volume < $5k).
-            - No price forecasts; use current metrics and trends.
-            
-            Output in JSON:
-            {
-              "recommendation": {"token": "name", "symbol": "symbol", "address": "tokenAddress", "action": "SELL" | "HOLD"},
-              "reasoning": "2-3 sentence explanation focusing on short-term metrics",
-              "confidence": "0-1 score (e.g., 0.9 for strong SELL)"
-            }
-            Return the top token action or "HOLD" if no sell signals are clear.
-          `
+
+              Evaluate each token based on:
+              1. **Momentum**: Use priceChange (m5: +5 min, m12: +10 min, h1: +1 hour); sell if m5 < -5% *and* h1 < -10% with declining volume, hold if m5 or m12 > +2%.
+              2. **Profit Taking**: Sell if h1 > +10%, m5 stalls (< +1%), and volume drops >15% (target 2-10% net profit after fees); hold if m12 > +3% and volume suggests upside.
+              3. **Volume**: Require m5 volume > $500, h1 > $5k; sell if volume falls >25% with negative price action.
+              4. **Liquidity**: Filter out tokens with USD liquidity < $5,000.
+
+              Rules:
+              - **Sell for Profit**: Deduct fees, target 2-10% net gain, sell if momentum slows after h1 > +10%.
+              - **Sell on Drop**: Exit if m5 < -5% *and* h1 < -10% with volume declining.
+              - **Hold**: Default if m5 or m12 > +2%, volume supports price, or upside persists (m12 > +5%).
+              - Filter low-quality tokens (liquidity < $5k, h1 volume < $5k).
+
+              Output in JSON:
+              {
+                "recommendation": {"token": "name", "symbol": "symbol", "address": "tokenAddress", "action": "SELL" | "HOLD"},
+                "reasoning": "2-3 sentences on momentum, profit potential, and volume trends",
+                "confidence": "0-1 score (e.g., 0.8 for strong SELL, 0.65 for HOLD)"
+              }
+              Return the top token action; default to "HOLD" unless sell signals are clear.
+           `
         }
       ],
-      max_tokens: 300, // Shorter response for quick analysis
-      temperature: 0.6 // Slightly more deterministic for trading precision
+      max_tokens: 300,
+      temperature: 0.5
     });
     const response = JSON.parse(completion.choices[0].message.content);
-    // console.log("🤖 Grok 3 says:", response);
     return response;
   } catch (error) {
     console.error("❌ Error fetching response:", error);
@@ -519,7 +571,6 @@ async function getGrokSellResponse(tokenData) {
   }
 }
 
-// ✅ Wallet Balance Check
 async function checkBalance() {
   const balance = await connection.getBalance(keypair.publicKey);
   console.log(`✅ Wallet balance: ${balance / 1000000000} SOL`);
@@ -600,54 +651,58 @@ async function checkBalance() {
 
 // Add this function to handle automated trading
 
-async function swapTokens(amount, outputToken, isSell = false) {
+async function swapTokens(amount, outputToken, isSell = false, slippageBps = SLIPPAGE) {
   const action = isSell ? "Selling" : "Buying";
 
   try {
     bot.sendMessage(chatId, `🔄 ${action} token... Fetching swap details`);
-    let quoteUrl
-    // const quoteUrl = `https://api.jup.ag/swap/v1/quote?inputMint=${isSell ? outputToken : INPUT_TOKEN}&outputMint=${isSell ? tokenOut : outputToken}&amount=${amount}&slippageBps=${SLIPPAGE}`;
-    if(!isSell){
-      quoteUrl = `https://api.jup.ag/swap/v1/quote?inputMint=${INPUT_TOKEN}&outputMint=${outputToken}&amount=${amount}&slippageBps=${SLIPPAGE}`;
-    }else{
-      console.log("sell is colling")
-     quoteUrl = `https://api.jup.ag/swap/v1/quote?inputMint=${outputToken}&outputMint=${INPUT_TOKEN}&amount=${amount}&slippageBps=${SLIPPAGE}`;
-    }
-   
-    console.log("quoteUrl ===>>",quoteUrl);
+
+    // Step 1: Fetch the quote
+    const quoteUrl = isSell
+      ? `https://api.jup.ag/swap/v1/quote?inputMint=${outputToken}&outputMint=${INPUT_TOKEN}&amount=${amount}&slippageBps=${slippageBps}`
+      : `https://api.jup.ag/swap/v1/quote?inputMint=${INPUT_TOKEN}&outputMint=${outputToken}&amount=${amount}&slippageBps=${slippageBps}`;
     const quoteResponse = await fetch(quoteUrl);
     const quote = await quoteResponse.json();
+    if (quote.error) throw new Error("No swap route available");
 
-    if (!quote || !quote.routePlan) {
-      throw new Error("No swap route available");
-    }
+    // Step 2: Fetch a fresh blockhash *before* creating the transaction
+    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("finalized");
 
+    // Step 3: Create the swap transaction with the fresh blockhash
     const swapResponse = await fetch('https://api.jup.ag/swap/v1/swap', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         userPublicKey: fromAddress,
         wrapAndUnwrapSol: true,
-        computeUnitPriceMicroLamports: 5000,
-        quoteResponse: quote
+        computeUnitPriceMicroLamports: 50000, // Increase priority fee for faster processing
+        quoteResponse: quote,
+        // Optionally pass the blockhash to Jupiter if supported (check API docs)
       })
     });
-
     const swapData = await swapResponse.json();
-    console.log("🔄 Swap Data:", swapData) ;
-    if (!swapData?.swapTransaction) {
-      throw new Error('Failed to get swap transaction');
-    }
+    if (!swapData?.swapTransaction) throw new Error('Failed to get swap transaction');
 
+    // Step 4: Deserialize and sign the transaction
     const transaction = VersionedTransaction.deserialize(Buffer.from(swapData.swapTransaction, 'base64'));
     transaction.sign([keypair]);
 
+    // Step 5: Send the transaction with retries and preflight
     const signature = await connection.sendRawTransaction(transaction.serialize(), {
-      maxRetries: 2,
-      skipPreflight: true
+      maxRetries: 5, // Increase retries
+      skipPreflight: false, // Enable preflight to catch issues early
     });
 
-    const confirmation = await connection.confirmTransaction({ signature }, "finalized");
+    // Step 6: Confirm the transaction using the same blockhash
+    const confirmation = await connection.confirmTransaction(
+      {
+        signature,
+        blockhash,
+        lastValidBlockHeight,
+      },
+      "finalized"
+    );
+
     if (confirmation.value.err) {
       throw new Error(`Transaction failed: ${JSON.stringify(confirmation.value.err)}`);
     }
@@ -663,15 +718,15 @@ async function swapTokens(amount, outputToken, isSell = false) {
 
 // Update sellToken to use swapTokens
 async function sellToken(fromAddress, tokenIn, tokenOut, amount, slippage, buyPrice, chatId) {
-  console.log(`Attempting to sell ${amount} of ${tokenIn} for ${tokenOut}`);
-  return await swapTokens(amount, tokenIn, true);
+  console.log(`Attempting to sell ${amount} of ${tokenIn} for ${tokenOut} with slippage ${slippage}`);
+  return await swapTokens(amount, tokenIn, true, slippage);
 }
 
 // Add a flag to track if auto-trading is running
 let isAutoTrading = false;
 let autoTradeInterval;
 
-// Modify the start command handler
+// Start command handler
 bot.onText(/\/start/, async (msg) => {
   if (msg.chat.id.toString() !== chatId) {
     bot.sendMessage(msg.chat.id, '❌ Unauthorized! You are not allowed to trade.');
@@ -686,13 +741,10 @@ bot.onText(/\/start/, async (msg) => {
   try {
     isAutoTrading = true;
     bot.sendMessage(chatId, '🤖 Starting 24/7 auto-trading bot...');
-    
+
     // Start parallel buy and sell loops
-    Promise.all([autoBuyLoop(), autoSellLoop()]).catch(error => {
-      console.error('Auto-trading failed:', error);
-      isAutoTrading = false;
-      bot.sendMessage(chatId, '❌ Auto-trading stopped due to an error!');
-    });
+    autoBuyLoop();
+    autoSellLoop();
   } catch (error) {
     console.error('Error starting auto-trade:', error);
     isAutoTrading = false;
@@ -700,109 +752,343 @@ bot.onText(/\/start/, async (msg) => {
   }
 });
 
+// Stop command handler
+bot.onText(/\/stop/, async (msg) => {
+  if (msg.chat.id.toString() !== chatId) {
+    bot.sendMessage(msg.chat.id, '❌ Unauthorized! You are not allowed to control trading.');
+    return;
+  }
+
+  if (!isAutoTrading) {
+    bot.sendMessage(chatId, '⚠️ Auto-trading is already stopped.');
+    return;
+  }
+
+  try {
+    isAutoTrading = false;
+    bot.sendMessage(chatId, '🛑 Stopping auto-trading bot...');
+  } catch (error) {
+    console.error('Error stopping auto-trade:', error);
+    bot.sendMessage(chatId, '❌ Failed to stop auto-trading.');
+  }
+});
+
 // Sleep utility
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-// Buy loop
+// New improved implementations for autoBuyLoop and autoSellLoop
+
+// Buy loop with improved stop handling
 async function autoBuyLoop() {
-  while (isAutoTrading) {
+  // Track when stop was requested for timeout enforcement
+  let stopRequestTime = null;
+  
+  while (isAutoTrading || (stopRequestTime && Date.now() - stopRequestTime < 20000)) {
     try {
+      // Check if stop was requested and set the time if not already set
+      if (!isAutoTrading && !stopRequestTime) {
+        stopRequestTime = Date.now();
+        console.log('Stop requested in buyLoop, will exit within 20 seconds');
+        bot.sendMessage(chatId, '🛑 Buy loop will stop within 20 seconds...');
+      }
+      
+      // Force stop after 20 seconds from stop request
+      if (stopRequestTime && Date.now() - stopRequestTime >= 20000) {
+        console.log('Forcing buy loop to stop after timeout');
+        break;
+      }
+      
       const balance = await checkBalance();
-      if (balance <= 0.001) {
-        console.log('ℹ️ Insufficient balance for buying');
-        await sleep(30000); // Check every 30 seconds
+      if (balance <= 0.001 || !isAutoTrading) {
+        if (!isAutoTrading) console.log('ℹ️ Stop requested, skipping buy operations');
+        else console.log('ℹ️ Insufficient balance for buying');
+        await sleep(5000); // Check more frequently when stopping
         continue;
       }
 
-      // Buy trending tokens with filters
-      await getTrendingTokens({
-        minLiquidity: 10000, // $10k minimum liquidity
-        minVolumeH1: 5000,   // $5k volume in last hour
-        minAgeHours: 24      // Token must be at least 1 day old
-      });
+      // Setup a timeout to check isAutoTrading during long operations
+      const checkStopInterval = setInterval(() => {
+        if (!isAutoTrading && !stopRequestTime) {
+          stopRequestTime = Date.now();
+          console.log('Stop detected during trending tokens fetch');
+          bot.sendMessage(chatId, '🛑 Stopping buy operations...');
+        }
+      }, 2000);
 
-      await sleep(30000); // Buy every 30 seconds
+      try {
+        // Only proceed with trending tokens fetch if still auto trading
+        if (isAutoTrading) {
+          await getTrendingTokens({
+            minLiquidity: 10000, // $10k minimum liquidity
+            minVolumeH1: 5000,   // $5k volume in last hour
+            minAgeHours: 24      // Token must be at least 1 day old
+          });
+        }
+      } finally {
+        clearInterval(checkStopInterval); // Always clear the interval
+      }
+
+      // Check if stop is requested before sleeping
+      if (!isAutoTrading) {
+        await sleep(1000); // Short sleep to allow for stop processing
+      } else {
+        await sleep(30000); // Normal interval between operations
+      }
     } catch (error) {
       console.error('Buy loop error:', error);
-      bot.sendMessage(chatId, '⚠️ Buy loop paused due to error');
-      await sleep(60000); // Wait 1 minute on error
+      if (isAutoTrading) {
+        bot.sendMessage(chatId, '⚠️ Buy loop paused due to error');
+      }
+      await sleep(5000); // Shorter wait on error when stopping
     }
   }
+  
+  console.log('Buy loop has stopped');
+  bot.sendMessage(chatId, '✅ Buy loop has stopped completely');
 }
 
-// Sell loop
+// Sell loop with improved stop handling
 async function autoSellLoop() {
-  while (isAutoTrading) {
+  const failedTokens = new Set(); // Persistent blacklist across loop iterations
+  // Track when stop was requested for timeout enforcement
+  let stopRequestTime = null;
+  
+  while (isAutoTrading || (stopRequestTime && Date.now() - stopRequestTime < 20000)) {
     try {
+      // Check if stop was requested and set the time if not already set
+      if (!isAutoTrading && !stopRequestTime) {
+        stopRequestTime = Date.now();
+        console.log('Stop requested in sellLoop, will exit within 20 seconds');
+        bot.sendMessage(chatId, '🛑 Sell loop will stop within 20 seconds...');
+      }
+      
+      // Force stop after 20 seconds from stop request
+      if (stopRequestTime && Date.now() - stopRequestTime >= 20000) {
+        console.log('Forcing sell loop to stop after timeout');
+        break;
+      }
+      
       const tokens = await getPurchasedTokens(fromAddress);
-      if (!tokens.length) {
+      if (!tokens.length || !isAutoTrading) {
+        if (!isAutoTrading) {
+          await sleep(1000); // Short sleep when stopping
+          continue;
+        }
+        
         bot.sendMessage(chatId, 'ℹ️ No tokens to sell');
         await sleep(30000);
         continue;
       }
 
-      // Parallelize sell operations
-      await Promise.all(tokens.map(async (token) => {
-        try {
-          const response = await fetch(`https://api.dexscreener.com/tokens/v1/solana/${token.mint}`);
-          const tokenData = await response.json();
-          const sellData = tokenData.map(t => ({
-            name: t.baseToken.name || "Unknown",
-            symbol: t.baseToken.symbol || "UNKNOWN",
-            address: t.baseToken.address,
-            priceChange: { m5: t.priceChange?.m5 || 0, h1: t.priceChange?.h1 || 0 },
-            volume: { m5: t.volume?.m5 || 0, h1: t.volume?.h1 || 0 },
-            liquidity: t.liquidity || { usd: 0 },
-            balance: token.balance
-          }));
+      // Filter out blacklisted tokens
+      const validTokens = tokens.filter(token => !failedTokens.has(token.mint));
 
-          const grokResponse = await getGrokSellResponse(sellData);
-          if (grokResponse?.recommendation?.action === "SELL") {
-            const amountToSell = Math.max(1, Math.floor(Number(token.balance) * 0.999));
-            await sellWithRetry(
-              fromAddress,
-              grokResponse.recommendation.address,
-              tokenOut,
-              amountToSell,
-              slippage,
-              chatId
-            );
-            bot.sendMessage(chatId, `💰 Sold ${grokResponse.recommendation.symbol}`);
-          }
-        } catch (error) {
-          console.error(`Error processing sell for ${token.mint}:`, error);
+      // Setup a timeout to check isAutoTrading during long operations
+      const checkStopInterval = setInterval(() => {
+        if (!isAutoTrading && !stopRequestTime) {
+          stopRequestTime = Date.now();
+          console.log('Stop detected during token selling operations');
+          bot.sendMessage(chatId, '🛑 Stopping sell operations...');
         }
-      }));
+      }, 2000);
+      
+      try {
+        // Process tokens only if we're still auto-trading
+        if (isAutoTrading && validTokens.length > 0) {
+          // Process tokens in series instead of parallel for better control
+          for (const token of validTokens) {
+            // Check if stop was requested before each token
+            if (!isAutoTrading) break;
+            
+            try {
+              const response = await fetch(`https://api.dexscreener.com/tokens/v1/solana/${token.mint}`);
+              const tokenData = await response.json();
+              const sellData = tokenData.map(t => ({
+                name: t.baseToken.name || "Unknown",
+                symbol: t.baseToken.symbol || "UNKNOWN",
+                address: t.baseToken.address,
+                priceChange: { m5: t.priceChange?.m5 || 0, h1: t.priceChange?.h1 || 0 },
+                volume: { m5: t.volume?.m5 || 0, h1: t.volume?.h1 || 0 },
+                liquidity: t.liquidity || { usd: 0 },
+                balance: token.balance
+              }));
 
-      await sleep(30000); // Sell check every 30 seconds
+              // Check stop status before continuing
+              if (!isAutoTrading) break;
+
+              const grokResponse = await getGrokSellResponse(sellData);
+              console.log("grokResponse ==>>",grokResponse)
+              // Check stop status before continuing
+              if (!isAutoTrading) break;
+              
+              if (grokResponse?.recommendation?.action === "SELL") {
+                const amountToSell = Math.max(1, Math.floor(Number(token.balance) * 0.999));
+                const failedFromSell = await sellWithRetry(
+                  fromAddress,
+                  grokResponse.recommendation.address,
+                  tokenOut, // Assuming tokenOut is defined
+                  amountToSell,
+                  SLIPPAGE, // Initial slippage
+                  chatId
+                );
+                // Add any newly failed tokens to the blacklist
+                failedFromSell.forEach(token => failedTokens.add(token));
+                bot.sendMessage(chatId, `💰 Sold ${grokResponse.recommendation.symbol}`);
+              }
+            } catch (error) {
+              console.error(`Error processing sell for ${token.mint}:`, error);
+              if (error.message.includes("No swap route available")) {
+                failedTokens.add(token.mint);
+              }
+            }
+          }
+        }
+      } finally {
+        clearInterval(checkStopInterval); // Always clear the interval
+      }
+
+      // Check if stop is requested before sleeping
+      if (!isAutoTrading) {
+        await sleep(1000); // Short sleep to allow for stop processing
+      } else {
+        await sleep(30000); // Normal interval between operations
+      }
     } catch (error) {
       console.error('Sell loop error:', error);
-      bot.sendMessage(chatId, '⚠️ Sell loop paused due to error');
-      await sleep(60000); // Wait 1 minute on error
+      if (isAutoTrading) {
+        bot.sendMessage(chatId, '⚠️ Sell loop paused due to error');
+      }
+      await sleep(5000); // Shorter wait on error when stopping
     }
   }
+  
+  console.log('Sell loop has stopped');
+  bot.sendMessage(chatId, '✅ Sell loop has stopped completely');
 }
-
 // Sell with retry logic
-async function sellWithRetry(fromAddress, tokenAddress, tokenOut, amount, slippage, chatId, retries = 3) {
-  for (let attempt = 1; attempt <= retries; attempt++) {
+// async function sellWithRetry(fromAddress, tokenAddress, tokenOut, amount, initialSlippage, chatId, maxRetries = 3) {
+//   let slippage = initialSlippage;
+//   const failedTokens = new Set(); // Local blacklist for this session
+
+//   for (let attempt = 1; attempt <= maxRetries; attempt++) {
+//     try {
+//       await sellToken(fromAddress, tokenAddress, tokenOut, amount, slippage, 0, chatId);
+//       return; // Success, exit retry loop
+//     } catch (error) {
+//       console.error(`Sell attempt ${attempt} failed for ${tokenAddress}:`, error.message);
+//       if (error.message === "No swap route available") {
+//         // If no route is available, blacklist the token and exit early
+//         failedTokens.add(tokenAddress);
+//         bot.sendMessage(chatId, `❌ No swap route for ${tokenAddress}. Blacklisting token.`);
+//         throw new Error(`Sell failed: No swap route available for ${tokenAddress}`);
+//       }
+
+//       if (attempt === maxRetries) {
+//         bot.sendMessage(chatId, `❌ Failed to sell ${tokenAddress} after ${maxRetries} attempts`);
+//         throw error; // Final failure
+//       }
+
+//       // Increase slippage dynamically (e.g., 2 → 52 → 102 bps, cap at 500 bps)
+//       slippage = Math.min(initialSlippage + (attempt * 50), 500);
+//       console.log(`Retrying sell with slippage ${slippage} (attempt ${attempt + 1}/${maxRetries})...`);
+//       await sleep(5000 * attempt); // Exponential backoff: 5s, 10s, 15s
+//     }
+//   }
+//   return failedTokens; // Return blacklist for use in autoSellLoop
+// }
+
+async function sellWithRetry(fromAddress, tokenAddress, tokenOut, amount, initialSlippage, chatId, maxRetries = 3) {
+  let slippage = initialSlippage;
+  const failedTokens = new Set(); // Local blacklist for this session
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       await sellToken(fromAddress, tokenAddress, tokenOut, amount, slippage, 0, chatId);
       return; // Success, exit retry loop
     } catch (error) {
-      console.error(`Sell attempt ${attempt} failed for ${tokenAddress}:`, error);
-      if (attempt === retries) {
-        bot.sendMessage(chatId, `❌ Failed to sell ${tokenAddress} after ${retries} attempts`);
-        throw error; // Final failure
+      console.error(`Sell attempt ${attempt} failed for ${tokenAddress}:`, error.message);
+      
+      if (error.message === "No swap route available") {
+        failedTokens.add(tokenAddress);
+        // await burnToken(fromAddress, tokenAddress, amount, chatId);
+
+        bot.sendMessage(chatId, `❌ No swap route for ${tokenAddress}. Blacklisting token.`);
+        throw new Error(`Sell failed: No swap route available for ${tokenAddress}`);
       }
-      const adjustedSlippage = slippage + (attempt * 50); // Increase slippage dynamically
+
+      if (attempt === maxRetries) {
+        bot.sendMessage(chatId, `❌ Failed to sell ${tokenAddress} after ${maxRetries} attempts. Burning token...`);
+        await burnToken(fromAddress, tokenAddress, amount, chatId);
+        return; // Exit after burning
+      }
+
+      // Increase slippage dynamically (e.g., 2 → 52 → 102 bps, cap at 500 bps)
+      slippage = Math.min(initialSlippage + (attempt * 50), 500);
+      console.log(`Retrying sell with slippage ${slippage} (attempt ${attempt + 1}/${maxRetries})...`);
       await sleep(5000 * attempt); // Exponential backoff: 5s, 10s, 15s
-      console.log(`Retrying sell with slippage ${adjustedSlippage}...`);
-      slippage = adjustedSlippage;
     }
+  }
+  return failedTokens;
+}
+
+async function burnToken(fromAddress, tokenAddress, amount, chatId) {
+  try {
+    bot.sendMessage(chatId, `🔥 Burning ${amount} of ${tokenAddress} as it could not be sold.`);
+
+    const burnAddress = "0x000000000000000000000000000000000000dead";
+    const signature = await transferTokens(fromAddress, tokenAddress, burnAddress, amount);
+
+    bot.sendMessage(chatId, `🔥 Successfully burned ${amount} of ${tokenAddress}. Tx: https://solscan.io/tx/${signature}`);
+  } catch (error) {
+    console.error(`Failed to burn ${tokenAddress}:`, error.message);
+    bot.sendMessage(chatId, `❌ Failed to burn ${tokenAddress}: ${error.message}`);
   }
 }
 
+async function transferTokens(fromAddress, tokenAddress, toAddress, amount) {
+  const fromPubkey = new PublicKey(fromAddress);
+  const toPubkey = new PublicKey(toAddress);
+  const tokenPubkey = new PublicKey(tokenAddress);
+
+  // Get sender's token account
+  const fromTokenAccount = await Token.getAssociatedTokenAddress(
+    TOKEN_PROGRAM_ID,
+    tokenPubkey,
+    fromPubkey
+  );
+
+  // Check if burn address has an ATA (create if needed, though unnecessary for burn)
+  let toTokenAccount = await connection.getAccountInfo(toPubkey);
+  if (!toTokenAccount) {
+    const tx = new Transaction().add(
+      Token.createAssociatedTokenAccountInstruction(
+        TOKEN_PROGRAM_ID,
+        tokenPubkey,
+        toPubkey,
+        fromPubkey, // Payer
+        fromPubkey,
+        []
+      )
+    );
+    await connection.sendTransaction(tx, [keypair]);
+  }
+
+  // Transfer to burn address
+  const transaction = new Transaction().add(
+    Token.createTransferInstruction(
+      TOKEN_PROGRAM_ID,
+      fromTokenAccount,
+      toPubkey,
+      fromPubkey,
+      [],
+      amount // Adjust for decimals, e.g., amount * 10 ** decimals
+    )
+  );
+
+  const signature = await connection.sendTransaction(transaction, [keypair]);
+  await connection.confirmTransaction(signature, 'finalized');
+  return signature;
+}
 
 
 // ✅ Telegram Bot Ready
