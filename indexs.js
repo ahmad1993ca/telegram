@@ -58,6 +58,7 @@ async function getPurchasedTokens(walletAddress) {
 
   for (const account of tokenAccounts.value) {
     const accountInfo = await connection.getParsedAccountInfo(account.pubkey);
+    console.log("accountInfo =====>>>>",accountInfo.value.data.parsed);
     const tokenAmount = accountInfo.value.data.parsed.info.tokenAmount;
      console.log("tokenAmount ===>>",tokenAmount,tokenAmount.uiAmount > 0.00001)
     // Only include tokens with a balance greater than 0
@@ -142,7 +143,7 @@ async function getGrokResponse(tokenData, userBalance) {
       });
 
       const response = JSON.parse(completion.choices[0].message.content);
-
+       console.log("buy response send ====>>>>>>",response);
       // ✅ Convert percentage to actual SOL investment
       if (response.recommendation.action === "BUY") {
           response.recommendation.investAmount = (userBalance * response.recommendation.investPercentage) / 100;
@@ -315,7 +316,7 @@ async function getTrendingTokens(filters) {
 
     const bestTokens = [];
     const balance = await checkBalance();
-    if (balance <= 0.001) {
+    if (balance <= 0.01) {
       bot.sendMessage(chatId, '❌ Insufficient balance to trade!');
       return [];
     }
@@ -339,7 +340,7 @@ async function getTrendingTokens(filters) {
           }
         }
 
-        if (bestTokens.length > 0) {
+        if (bestTokens.length > 0 && balance > 0.01) {
           const intraday = await getGrokResponse(bestTokens, balance);
           if (!intraday) {
             bot.sendMessage(chatId, '❌ No trading recommendation available');
@@ -347,7 +348,7 @@ async function getTrendingTokens(filters) {
           }
 
           console.log("Intraday Recommendation:", intraday);
-          if (intraday.confidence >= 0.8 && intraday.recommendation.action === 'BUY') {
+          if (intraday.confidence >= 0.8 && intraday.recommendation.action === 'BUY' && intraday.recommendation.address !== 'Ddm4DTxNZxABUYm2A87TFLY6GDG2ktM2eJhGZS3EbzHM') {
             bot.sendMessage(chatId, `
               🎯 Best Trading Opportunity:
               Token: ${intraday.recommendation.token}
@@ -535,7 +536,7 @@ async function getGrokSellResponse(tokenData) {
         {
           role: "user",
           content: `
-            As Grok 3, built by xAI, you’re an expert crypto trading analyst deciding whether to sell a token for profit or hold, exiting only if a 5% drop is imminent, as of March 12, 2025. Analyze these tokens from DEXscreener data:
+            As Grok 3, built by xAI, you’re an expert crypto trading analyst deciding whether to sell a token for profit or hold, exiting only if a 5% drop is imminent, as of Today. Analyze these tokens from DEXscreener data:
             ${JSON.stringify(tokenData, null, 2)}
 
               Evaluate each token based on:
@@ -563,13 +564,46 @@ async function getGrokSellResponse(tokenData) {
       max_tokens: 300,
       temperature: 0.5
     });
-    const response = JSON.parse(completion.choices[0].message.content);
-    return response;
+    console.log("completion======>>>", completion.choices[0]);
+
+    // Extract raw text response
+    let rawContent = completion.choices[0].message.content.trim();
+
+    // 1️⃣ Try to extract JSON inside triple backticks (```json ... ```)
+    let jsonMatch = rawContent.match(/```json\s*([\s\S]*?)\s*```/);
+
+    if (jsonMatch) {
+      rawContent = jsonMatch[1].trim(); // Extract JSON inside the block
+    } 
+
+    try {
+      // 2️⃣ Attempt to parse JSON (either extracted or original)
+      const response = JSON.parse(rawContent);
+      return response;
+    } catch (jsonError) {
+      console.warn("⚠ JSON parse failed, possible mixed content:", jsonError.message);
+      
+      // 3️⃣ Fallback: Try to extract first valid JSON object from response
+      const jsonRegex = /{[\s\S]*}/;
+      let possibleJsonMatch = rawContent.match(jsonRegex);
+      
+      if (possibleJsonMatch) {
+        try {
+          return JSON.parse(possibleJsonMatch[0]); // Extract probable JSON
+        } catch (fallbackError) {
+          console.error("❌ Failed parsing extracted JSON:", fallbackError.message);
+        }
+      }
+      
+      throw new Error("❌ No valid JSON found after multiple attempts.");
+    }
+
   } catch (error) {
     console.error("❌ Error fetching response:", error);
     return null;
   }
 }
+
 
 async function checkBalance() {
   const balance = await connection.getBalance(keypair.publicKey);
@@ -869,6 +903,7 @@ async function autoSellLoop() {
       }
       
       const tokens = await getPurchasedTokens(fromAddress);
+      console.log("purchased token",tokens);
       if (!tokens.length || !isAutoTrading) {
         if (!isAutoTrading) {
           await sleep(1000); // Short sleep when stopping
@@ -903,21 +938,40 @@ async function autoSellLoop() {
             try {
               const response = await fetch(`https://api.dexscreener.com/tokens/v1/solana/${token.mint}`);
               const tokenData = await response.json();
-              const sellData = tokenData.map(t => ({
+              console.log("tokenData =======>>",tokenData)
+              const sellData = await tokenData.map(t => ({
                 name: t.baseToken.name || "Unknown",
                 symbol: t.baseToken.symbol || "UNKNOWN",
                 address: t.baseToken.address,
-                priceChange: { m5: t.priceChange?.m5 || 0, h1: t.priceChange?.h1 || 0 },
-                volume: { m5: t.volume?.m5 || 0, h1: t.volume?.h1 || 0 },
-                liquidity: t.liquidity || { usd: 0 },
-                balance: token.balance
+                priceUsd: t.priceUsd || 0, // Current price in USD
+                priceNative: t.priceNative || 0, // Price in SOL
+                priceChange: {
+                  m5: t.priceChange?.m5 || 0, // 5-min change
+                  h1: t.priceChange?.h1 || 0, // 1-hour change
+                  h6: t.priceChange?.h6 || 0, // 6-hour change
+                  h24: t.priceChange?.h24 || 0 // 24-hour change
+                },
+                volume: {
+                  m5: t.volume?.m5 || 0,
+                  h1: t.volume?.h1 || 0,
+                  h6: t.volume?.h6 || 0,
+                  h24: t.volume?.h24 || 0
+                },
+                liquidity: {
+                  usd: t.liquidity?.usd || 0,
+                  base: t.liquidity?.base || 0, // Base token amount in pool
+                  quote: t.liquidity?.quote || 0 // Quote token (e.g., SOL) amount
+                },
+                marketCap: t.marketCap || 0, // Market cap for valuation
+                fdv: t.fdv || 0, // Fully diluted valuation
+                balance: token.balance || 0 // Your holding amount
               }));
 
               // Check stop status before continuing
               if (!isAutoTrading) break;
-
+              console.log("sellData ==>>", sellData);
               const grokResponse = await getGrokSellResponse(sellData);
-              console.log("grokResponse ==>>",grokResponse)
+              console.log("grokResponseSell ==>>",grokResponse)
               // Check stop status before continuing
               if (!isAutoTrading) break;
               
@@ -965,7 +1019,7 @@ async function autoSellLoop() {
   console.log('Sell loop has stopped');
   bot.sendMessage(chatId, '✅ Sell loop has stopped completely');
 }
-// Sell with retry logic
+
 // async function sellWithRetry(fromAddress, tokenAddress, tokenOut, amount, initialSlippage, chatId, maxRetries = 3) {
 //   let slippage = initialSlippage;
 //   const failedTokens = new Set(); // Local blacklist for this session
@@ -976,16 +1030,19 @@ async function autoSellLoop() {
 //       return; // Success, exit retry loop
 //     } catch (error) {
 //       console.error(`Sell attempt ${attempt} failed for ${tokenAddress}:`, error.message);
+      
 //       if (error.message === "No swap route available") {
-//         // If no route is available, blacklist the token and exit early
 //         failedTokens.add(tokenAddress);
+//         // await burnToken(fromAddress, tokenAddress, amount, chatId);
+
 //         bot.sendMessage(chatId, `❌ No swap route for ${tokenAddress}. Blacklisting token.`);
 //         throw new Error(`Sell failed: No swap route available for ${tokenAddress}`);
 //       }
 
 //       if (attempt === maxRetries) {
-//         bot.sendMessage(chatId, `❌ Failed to sell ${tokenAddress} after ${maxRetries} attempts`);
-//         throw error; // Final failure
+//         bot.sendMessage(chatId, `❌ Failed to sell ${tokenAddress} after ${maxRetries} attempts. Burning token...`);
+//         await burnToken(fromAddress, tokenAddress, amount, chatId);
+//         return; // Exit after burning
 //       }
 
 //       // Increase slippage dynamically (e.g., 2 → 52 → 102 bps, cap at 500 bps)
@@ -994,38 +1051,44 @@ async function autoSellLoop() {
 //       await sleep(5000 * attempt); // Exponential backoff: 5s, 10s, 15s
 //     }
 //   }
-//   return failedTokens; // Return blacklist for use in autoSellLoop
+//   return failedTokens;
 // }
 
-async function sellWithRetry(fromAddress, tokenAddress, tokenOut, amount, initialSlippage, chatId, maxRetries = 3) {
+async function sellWithRetry(fromAddress, tokenAddress, tokenOut, amount, initialSlippage = 100, chatId, maxRetries = 3) {
   let slippage = initialSlippage;
-  const failedTokens = new Set(); // Local blacklist for this session
+  let sellAmount = amount;
+  const failedTokens = new Set();
+
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      await sellToken(fromAddress, tokenAddress, tokenOut, amount, slippage, 0, chatId);
-      return; // Success, exit retry loop
+      await sellToken(fromAddress, tokenAddress, tokenOut, sellAmount, slippage, 0, chatId);
+      bot.sendMessage(chatId, `✅ Sold ${sellAmount} of ${tokenAddress} successfully!`);
+      return;
     } catch (error) {
       console.error(`Sell attempt ${attempt} failed for ${tokenAddress}:`, error.message);
-      
-      if (error.message === "No swap route available") {
-        failedTokens.add(tokenAddress);
-        // await burnToken(fromAddress, tokenAddress, amount, chatId);
 
-        bot.sendMessage(chatId, `❌ No swap route for ${tokenAddress}. Blacklisting token.`);
-        throw new Error(`Sell failed: No swap route available for ${tokenAddress}`);
+      if (error.message === "No swap route available") {
+        if (attempt === 1 && sellAmount > 0.01) { // Avoid infinite reduction
+          sellAmount = sellAmount / 2;
+          console.log(`Reducing amount to ${sellAmount} for retry...`);
+          continue;
+        } else {
+          failedTokens.add(tokenAddress);
+          bot.sendMessage(chatId, `❌ No swap route for ${tokenAddress}. Blacklisting token.`);
+          throw new Error(`Sell failed: No swap route available for ${tokenAddress}`);
+        }
       }
 
       if (attempt === maxRetries) {
         bot.sendMessage(chatId, `❌ Failed to sell ${tokenAddress} after ${maxRetries} attempts. Burning token...`);
         await burnToken(fromAddress, tokenAddress, amount, chatId);
-        return; // Exit after burning
+        return;
       }
 
-      // Increase slippage dynamically (e.g., 2 → 52 → 102 bps, cap at 500 bps)
-      slippage = Math.min(initialSlippage + (attempt * 50), 500);
-      console.log(`Retrying sell with slippage ${slippage} (attempt ${attempt + 1}/${maxRetries})...`);
-      await sleep(5000 * attempt); // Exponential backoff: 5s, 10s, 15s
+      slippage = Math.min(initialSlippage + (attempt * 200), 1000);
+      console.log(`Retrying sell with slippage ${slippage} and amount ${sellAmount} (attempt ${attempt + 1}/${maxRetries})...`);
+      await sleep(5000 * attempt);
     }
   }
   return failedTokens;
