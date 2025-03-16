@@ -461,16 +461,6 @@ async function swapTokens(amount, outputToken,intraday, isSell = false, slippage
     }
   })
 }else{
-  var sqlDelete = `DELETE FROM transactions WHERE address="${outputToken}"`;
-  db.query(sqlDelete, function (err, result) {
-    console.log('result', err)
-    if (err) {
-        return result.json(err);
-    }
-    else {
-      console.log("Deleted token ")
-    }
-  })
   
 }
 return signature;
@@ -509,8 +499,12 @@ bot.onText(/\/start/, async (msg) => {
     bot.sendMessage(chatId, '🤖 Starting 24/7 auto-trading bot...');
 
     // Start parallel buy and sell loops
-    // autoBuyLoop();
+    autoBuyLoop();
+     // Add delay between operations (e.g., 1 second)
+     await new Promise(resolve => setTimeout(resolve, 1000));
     autoSellLoop();
+     // Add delay before next cycle
+     await new Promise(resolve => setTimeout(resolve, 1000));
   } catch (error) {
     console.error('Error starting auto-trade:', error);
     isAutoTrading = false;
@@ -634,36 +628,44 @@ async function autoSellLoop() {
       // Fetch purchased tokens
         const tokens = await getPurchasedTokens(fromAddress);
         console.log("purchased token ===>>>", tokens);
-
+        let allTokens;
         // Fetch all tokens from the database
-        let sqlquery= "SELECT * FROM transactions"; // Adjust the query as per your database schema
-        const allTokens  = await  db.query(sqlquery, function (err, result) {
-          console.log('result', err)
-          if (err) {
-              return result.json(err);
-          }
-          else {
-            console.log("insert token ",result)
-             return result;
-          }
-        })
-         console.log("allTokens",allTokens)
-
-        // Extract the mint addresses of purchased tokens
+        try {
+          const sqlquery = "SELECT * FROM transactions";
+          const allTokens = await new Promise((resolve, reject) => {
+              db.query(sqlquery, (error, results) => {
+                  if (error) {
+                      reject(error);
+                      return;
+                  }
+                  resolve(results);
+              });
+          });
+  
+          console.log("allTokens", allTokens);
+                  // Extract the mint addresses of purchased tokens
         const purchasedTokenMints = tokens.map(token => token.mint);
 
         // Filter out tokens that are not in the purchased tokens list
-        const tokensToDelete = allTokens.filter(token => !purchasedTokenMints.includes(token.mint));
-
-        // Delete tokens that are not in the purchased tokens list
+        const tokensToDelete = allTokens.filter(token => !purchasedTokenMints.includes(token.address));
+          console.log("tokensToDelete",tokensToDelete)
+          // Continue with your token processing...
+          // Delete tokens that are not in the purchased tokens list
         if (tokensToDelete.length > 0) {
             for (const token of tokensToDelete) {
-                await db.query('DELETE FROM tokens WHERE mint = ?', [token.mint]); // Adjust the query as per your database schema
-                console.log(`Deleted token with mint: ${token.mint}`);
+                await db.query('DELETE FROM transactions WHERE hash = ?', [token.hash]); // Adjust the query as per your database schema
+                console.log(`Deleted token with mint: ${token.address}`);
             }
         } else {
             console.log('No tokens to delete.');
         }
+  
+      } catch (error) {
+          console.error("Database error:", error);
+          // Handle the error appropriately
+      }
+
+        
       if (!tokens.length || !isAutoTrading) {
         if (!isAutoTrading) {
           await sleep(1000); // Short sleep when stopping
