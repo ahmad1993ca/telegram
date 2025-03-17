@@ -94,72 +94,81 @@ const client = new OpenAI({
 
 async function getGrokResponse(tokenData, userBalance) {
   try {
-      const completion = await client.chat.completions.create({
-          model: "grok-2-latest", 
-          messages: [
-              {
-                  role: "system",
-                  content: "You are Grok 2, a crypto trading analyst built by xAI, optimized for short-term trading insights with real-time data analysis."
+    const completion = await client.chat.completions.create({
+      model: "grok-2-latest",
+      messages: [
+        {
+          role: "system",
+          content: "You are Grok 2, a crypto trading analyst built by xAI, optimized for short-term trading insights with real-time data analysis."
+        },
+        {
+          role: "user",
+          content: `
+            **Trading Strategy**:
+            - Analyze trending tokens from DEXscreener and filter based on liquidity, momentum, safety, and taxes.
+            - Suggest an investment percentage (between 20-50% of available balance).
+            - Suggest a sell price based on a reasonable profit margin (e.g., 10-30%).
+
+            **User Balance**: ${userBalance} SOL
+            **Token Data**: ${JSON.stringify(tokenData, null, 2)}
+
+            **Evaluation Rules**:
+            1️⃣ **Liquidity & Market Safety**:
+                - ✅ Must have **$10k+ USD liquidity** and **h1 volume > $10k**.
+                - ❌ Reject if **liquidity < $10k** or **volume too low**.
+
+            2️⃣ **Momentum Analysis**:
+                - ✅ **5m & 1h price change must be positive** (>+2% preferred).
+                - ❌ Reject if **price drops > -20% in any timeframe**.
+
+            3️⃣ **Security & Tax Detection**:
+                - ✅ Contract must be **at least 24 hours old** (check \`pairCreatedAt\` timestamp).
+                - ❌ Reject if **buy/sell taxes > 5%** (if tax data is unavailable, assume high risk and reject unless explicitly safe).
+                - ❌ Reject if rug pull signs (e.g., sudden liquidity drop) or honeypot detected.
+
+            **Output JSON**:
+            {
+              "recommendation": {
+                "token": "name",
+                "symbol": "symbol",
+                "address": "tokenAddress",
+                "action": "BUY" | "PASS",
+                "investPercentage": 20-50,  // % of balance to invest (dynamic)
+                "sellPrice": "target price (e.g., 10-30% above current priceUsd)",
+                "priceUsd": "current price in USD"
               },
-              {
-                  role: "user",
-                  content: `
-                  **Trading Strategy**:
-                  - Analyze trending tokens from DEXscreener and filter based on liquidity, momentum, and safety.
-                  - **Suggest an investment percentage** (between 20-50% of available balance).
-                  - **Suggest a sell price** based on a **reasonable profit margin** (e.g., 10-30%).
+              "reasoning": "Short explanation (include tax concerns if applicable)...",
+              "confidence": "0-1 score (e.g., 0.9 for strong BUY, 0.4 for PASS)"
+            }
 
-                  **User Balance**: ${userBalance} SOL
-                  **Token Data**: ${JSON.stringify(tokenData, null, 2)}
+            **Important**:
+            - Return *only* a valid JSON object, with no additional text outside the JSON.
+            - If tax information is missing, assume potential high taxes (>5%) and reject unless proven safe.
+            - Use current timestamp (March 16, 2025) to calculate contract age from \`pairCreatedAt\`.
+          `
+        }
+      ],
+      max_tokens: 300,
+      temperature: 0.6
+    });
 
-                  **Evaluation Rules**:
-                  1️⃣ **Liquidity & Market Safety**:
-                      - ✅ Must have **$10k+ USD liquidity** and **h1 volume > $10k**.
-                      - ❌ Reject if **liquidity < $10k** or **volume too low**.
+    const rawContent = completion.choices[0].message.content.trim();
+    console.log("raw response ===>>>", rawContent); // Debug raw output
 
-                  2️⃣ **Momentum Analysis**:
-                      - ✅ **5m & 1h price change must be positive** (>+2% preferred).
-                      - ❌ Reject if **price drops > -20% in any timeframe**.
+    const response = JSON.parse(rawContent);
+    console.log("buy response send ====>>>>>>", response);
 
-                  3️⃣ **Security & Scam Detection**:
-                      - ✅ Contract must be **at least 24 hours old**.
-                      - ✅ Reject if **high tax (>10%)**, rug pull signs, or honeypot detected.
+    // Convert percentage to actual SOL investment
+    if (response.recommendation.action === "BUY") {
+      response.recommendation.investAmount = (userBalance * response.recommendation.investPercentage) / 100;
+    }
 
-                  **Output JSON (Example Format)**:
-                  {
-                      "recommendation": {
-                          "token": "name",
-                          "symbol": "symbol",
-                          "address": "tokenAddress",
-                          "action": "BUY" | "PASS",
-                          "investPercentage": 30,  // % of balance to invest (dynamic)
-                          "sellPrice": 1.10,        // Target price (10% profit)
-                          "priceUsd":priceUsd
-                      },
-                      "reasoning": "Short explanation...",
-                      "confidence": "0-1 score (e.g., 0.9 for strong BUY)"
-                  }
-                  `
-              }
-          ],
-          max_tokens: 300,
-          temperature: 0.6 
-      });
-
-      const response = JSON.parse(completion.choices[0].message.content);
-       console.log("buy response send ====>>>>>>",response);
-      // ✅ Convert percentage to actual SOL investment
-      if (response.recommendation.action === "BUY") {
-          response.recommendation.investAmount = (userBalance * response.recommendation.investPercentage) / 100;
-      }
-
-      return response;
+    return response;
   } catch (error) {
-      console.error("❌ Error fetching response:", error);
-      return null;
+    console.error("❌ Error fetching response:", error);
+    return null;
   }
 }
-
 
 // ✅ Safety Check Function (Filter out risky tokens + Honeypot Check)
 
@@ -242,7 +251,7 @@ async function getTrendingTokens(filters) {
           }
 
           console.log("Intraday Recommendation:", intraday);
-          if (intraday.confidence >= 0.2 && intraday.recommendation.action === 'BUY' && intraday.recommendation.address !== 'Ddm4DTxNZxABUYm2A87TFLY6GDG2ktM2eJhGZS3EbzHM') {
+          if (intraday.confidence >= 0.8 && intraday.recommendation.action === 'BUY' && intraday.recommendation.address !== 'Ddm4DTxNZxABUYm2A87TFLY6GDG2ktM2eJhGZS3EbzHM') {
             bot.sendMessage(chatId, `
               🎯 Best Trading Opportunity:
               Token: ${intraday.recommendation.token}
@@ -255,8 +264,8 @@ async function getTrendingTokens(filters) {
             console.log("43535664757 ===========",typeof balance ,typeof intraday.recommendation.investAmount)
             const tradeAmount = intraday.recommendation.investAmount * 1e9; // Convert SOL to lamports
             console.log("43535664757 ===========>>>>>>>>",investAmount > 0.011)
-            // investAmount > 0.011
-            if(true){
+            // 
+            if(investAmount > 0.011){
             console.log("43535664757 ===========>>>>>>>>000")
 
             await swapTokens(Math.round(tradeAmount), intraday.recommendation.address,intraday);
@@ -289,9 +298,20 @@ const slippage = 2; // 1% slippage
 
 
 async function getGrokSellResponse(tokenData) {
+  console.log("data is coming ===>>>", tokenData);
   try {
+    // Resolve the Promise if tokenData is an array containing a Promise
+    let resolvedData;
+    if (Array.isArray(tokenData) && tokenData[0] instanceof Promise) {
+      resolvedData = await tokenData[0]; // Await the first Promise in the array
+    } else {
+      resolvedData = tokenData; // Use as-is if not a Promise
+    }
+
+    console.log("resolved data ===>>>", resolvedData);
+
     const completion = await client.chat.completions.create({
-      model: "grok-2-latest", // Ensure this is the correct model name
+      model: "grok-2-latest",
       messages: [
         {
           role: "system",
@@ -300,9 +320,9 @@ async function getGrokSellResponse(tokenData) {
         {
           role: "user",
           content: `
-            As Grok 3, a crypto trading analyst built by xAI, you’re optimized for short-term trading insights with real-time data analysis. Today is March 15, 2025. Analyze the following token data from DEXscreener, including the current price (\`priceUsd\`) and my buy price (\`buy_price\`), to decide whether to sell for profit, sell on a loss, or hold:
+            As Grok 3, a crypto trading analyst built by xAI, you’re optimized for short-term trading insights with real-time data analysis. Today is March 16, 2025. Analyze the following token data from DEXscreener, including the current price (\`priceUsd\`) and my buy price (\`buy_price\`), to decide whether to sell for profit, sell on a loss, or hold:
 
-            ${JSON.stringify(tokenData, null, 2)}
+            ${JSON.stringify(resolvedData, null, 2)}
 
             Evaluate the token based on:
             1. **Profit/Loss Calculation**: 
@@ -342,46 +362,33 @@ async function getGrokSellResponse(tokenData) {
       max_tokens: 300,
       temperature: 0.5
     });
+
     console.log("completion======>>>", completion.choices[0]);
 
-    // Extract raw text response
     let rawContent = completion.choices[0].message.content.trim();
-
-    // 1️⃣ Try to extract JSON inside triple backticks (```json ... ```)
     let jsonMatch = rawContent.match(/```json\s*([\s\S]*?)\s*```/);
 
     if (jsonMatch) {
-      rawContent = jsonMatch[1].trim(); // Extract JSON inside the block
-    } 
+      rawContent = jsonMatch[1].trim();
+    }
 
     try {
-      // 2️⃣ Attempt to parse JSON (either extracted or original)
       const response = JSON.parse(rawContent);
       return response;
     } catch (jsonError) {
-      console.warn("⚠ JSON parse failed, possible mixed content:", jsonError.message);
-      
-      // 3️⃣ Fallback: Try to extract first valid JSON object from response
+      console.warn("⚠ JSON parse failed:", jsonError.message);
       const jsonRegex = /{[\s\S]*}/;
       let possibleJsonMatch = rawContent.match(jsonRegex);
-      
       if (possibleJsonMatch) {
-        try {
-          return JSON.parse(possibleJsonMatch[0]); // Extract probable JSON
-        } catch (fallbackError) {
-          console.error("❌ Failed parsing extracted JSON:", fallbackError.message);
-        }
+        return JSON.parse(possibleJsonMatch[0]);
       }
-      
       throw new Error("❌ No valid JSON found after multiple attempts.");
     }
-
   } catch (error) {
     console.error("❌ Error fetching response:", error);
     return null;
   }
 }
-
 
 
 async function checkBalance() {
@@ -749,7 +756,7 @@ async function autoSellLoop() {
 
                       fdv: t.fdv || 0, // Fully diluted valuation
                       holding_amount: token.balance || 0, // Your holding amount
-                      buy_price: sumBuyPrice / result.length || 0, // Your buy price
+                      buy_price: sumBuyPrice ? (sumBuyPrice / result.length) : (t.priceUsd * 1.01) || t.priceUsd * 0.01, // Your buy price
                     }));
 
                   // Check stop status before continuing
@@ -761,7 +768,9 @@ async function autoSellLoop() {
                   // if (!isAutoTrading) break;
 
                   if (grokResponse?.recommendation?.action === "SELL") {
-                    const amountToSell = Math.max(1, Math.floor(Number(token.balance) * 0.999));
+                    const decimals = 6; // Replace with actual token decimals
+                    const amountToSell = Math.floor(Number(token.balance) * (10 ** decimals));
+                    // const amountToSell = Math.max(1, Math.floor(Number(token.balance) * 0.999));
                     const failedFromSell = await sellWithRetry(
                       fromAddress,
                       grokResponse.recommendation.address,
@@ -771,7 +780,7 @@ async function autoSellLoop() {
                       chatId
                     );
                     // Add any newly failed tokens to the blacklist
-                    failedFromSell.forEach(token => failedTokens.add(token));
+                    // failedFromSell.forEach(token => failedTokens.add(token));
                     bot.sendMessage(chatId, `💰 Sold ${grokResponse.recommendation.symbol}`);
                   }
                 }
@@ -816,9 +825,12 @@ async function sellWithRetry(fromAddress, tokenAddress, tokenOut, amount, initia
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
+      // console.log("failedTokens.has(tokenAddress)",failedTokens.has(tokenAddress))
+      // if(failedTokens.has(tokenAddress)){
       await sellToken(fromAddress, tokenAddress, tokenOut, sellAmount, slippage, 0, chatId);
       bot.sendMessage(chatId, `✅ Sold ${sellAmount} of ${tokenAddress} successfully!`);
       return;
+      // }
     } catch (error) {
       console.error(`Sell attempt ${attempt} failed for ${tokenAddress}:`, error.message);
 
@@ -830,7 +842,7 @@ async function sellWithRetry(fromAddress, tokenAddress, tokenOut, amount, initia
         } else {
           failedTokens.add(tokenAddress);
           bot.sendMessage(chatId, `❌ No swap route for ${tokenAddress}. Blacklisting token.`);
-          throw new Error(`Sell failed: No swap route available for ${tokenAddress}`);
+          // throw new Error(`Sell failed: No swap route available for ${tokenAddress}`);
         }
       }
 
