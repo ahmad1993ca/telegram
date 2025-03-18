@@ -8,6 +8,17 @@ const bs58 = require('bs58');
 const OpenAI = require('openai');
 const db = require('./config/dbconfig')
 const { token } = require('@project-serum/anchor/dist/cjs/utils');
+const express = require('express');
+// const mysql = require('mysql2');
+const bodyParser = require('body-parser');
+const cors = require('cors');
+
+const app = express();
+const port = 3003;
+
+// Middleware
+app.use(bodyParser.json());
+app.use(cors());
 // const axios = require("axios");
 
 // ✅ Constants & Configuration
@@ -61,7 +72,7 @@ async function getPurchasedTokens(walletAddress) {
 
   for (const account of tokenAccounts.value) {
     const accountInfo = await connection.getParsedAccountInfo(account.pubkey);
-    // console.log("accountInfo =====>>>>",accountInfo);
+    console.log("accountInfo =====>>>>",accountInfo);
     const tokenAmount = accountInfo.value.data.parsed.info.tokenAmount;
      console.log("tokenAmount ===>>",tokenAmount,tokenAmount.uiAmount > 0.00001)
     // Only include tokens with a balance greater than 0
@@ -98,34 +109,35 @@ async function getGrokResponse(tokenData, userBalance) {
       model: "grok-2-latest",
       messages: [
         {
-          role: "system",
-          content: "You are Grok 2, a crypto trading analyst built by xAI, optimized for short-term trading insights with real-time data analysis."
+          "role": "system",
+          "content": "You are Grok 2, a crypto trading analyst built by xAI, optimized for short-term trading insights with real-time data analysis."
         },
         {
-          role: "user",
-          content: `
+          "role": "user",
+          "content": `
             **Trading Strategy**:
             - Analyze trending tokens from DEXscreener and filter based on liquidity, momentum, safety, and taxes.
             - Suggest an investment percentage (between 20-50% of available balance).
             - Suggest a sell price based on a reasonable profit margin (e.g., 10-30%).
-
+        
             **User Balance**: ${userBalance} SOL
             **Token Data**: ${JSON.stringify(tokenData, null, 2)}
-
+        
             **Evaluation Rules**:
             1️⃣ **Liquidity & Market Safety**:
                 - ✅ Must have **$10k+ USD liquidity** and **h1 volume > $10k**.
                 - ❌ Reject if **liquidity < $10k** or **volume too low**.
-
+        
             2️⃣ **Momentum Analysis**:
                 - ✅ **5m & 1h price change must be positive** (>+2% preferred).
                 - ❌ Reject if **price drops > -20% in any timeframe**.
-
+        
             3️⃣ **Security & Tax Detection**:
-                - ✅ Contract must be **at least 24 hours old** (check \`pairCreatedAt\` timestamp).
-                - ❌ Reject if **buy/sell taxes > 5%** (if tax data is unavailable, assume high risk and reject unless explicitly safe).
+                - ✅ Contract must be **at least 6 hours old** (check \`pairCreatedAt\` timestamp).
+                - ❌ Reject if **buy/sell taxes > 5%** (if tax data is unavailable, check volume, liquidity, and market momentum).
+                - ❌ **Reject tokens with a transfer fee that automatically buys the token upon transfer/minting** (detect this via tokenomics, past transactions, or on-chain data).
                 - ❌ Reject if rug pull signs (e.g., sudden liquidity drop) or honeypot detected.
-
+        
             **Output JSON**:
             {
               "recommendation": {
@@ -140,22 +152,39 @@ async function getGrokResponse(tokenData, userBalance) {
               "reasoning": "Short explanation (include tax concerns if applicable)...",
               "confidence": "0-1 score (e.g., 0.9 for strong BUY, 0.4 for PASS)"
             }
-
+        
             **Important**:
             - Return *only* a valid JSON object, with no additional text outside the JSON.
-            - If tax information is missing, assume potential high taxes (>5%) and reject unless proven safe.
-            - Use current timestamp (March 16, 2025) to calculate contract age from \`pairCreatedAt\`.
+            - If tax information is missing, check volume, liquidity, and market momentum.
+            - **Reject tokens that apply a transfer fee and auto-buy the token when transferred/minted.**
+            - Use the current timestamp (March 17, 2025) to calculate contract age from \`pairCreatedAt\`.
           `
-        }
+        }        
+        
       ],
       max_tokens: 300,
       temperature: 0.6
     });
 
+    // const rawContent = completion.choices[0].message.content.trim();
+    // console.log("raw response ===>>>", rawContent); // Debug raw output
+
+    // const response = await JSON.parse(rawContent);
+    // console.log("buy response send ====>>>>>>", response);
+
     const rawContent = completion.choices[0].message.content.trim();
     console.log("raw response ===>>>", rawContent); // Debug raw output
 
-    const response = JSON.parse(rawContent);
+    // Extract JSON from ```json ... ``` block
+    let jsonContent = rawContent;
+    const jsonMatch = rawContent.match(/```json\s*([\s\S]*?)\s*```/);
+    if (jsonMatch && jsonMatch[1]) {
+      jsonContent = jsonMatch[1].trim(); // Extract the JSON string inside the block
+    } else {
+      throw new Error("No valid JSON block found in response");
+    }
+
+    const response = JSON.parse(jsonContent); // Parse the extracted JSON
     console.log("buy response send ====>>>>>>", response);
 
     // Convert percentage to actual SOL investment
@@ -196,11 +225,11 @@ async function isSafeToken(token) {
     }
 
     // Check contract age (GMGN.AI suggests >24h)
-    const creationTime = new Date(info?.creationTime || 0);
-    if (Date.now() - creationTime.getTime() < 24 * 60 * 60 * 1000) {
-      console.log(`❌ Token too new: ${baseToken.address}`);
-      return false;
-    }
+    // const creationTime = new Date(info?.creationTime || 0);
+    // if (Date.now() - creationTime.getTime() < 24 * 60 * 60 * 1000) {
+    //   console.log(`❌ Token too new: ${baseToken.address}`);
+    //   return false;
+    // }
 
     return true;
   } catch (error) {
@@ -225,7 +254,7 @@ async function getTrendingTokens(filters) {
 
     const bestTokens = [];
     const balance = await checkBalance();
-    if (balance <= 0.01) {
+    if (balance <= 0.02) {
       bot.sendMessage(chatId, '❌ Insufficient balance to trade!');
       return [];
     }
@@ -233,16 +262,20 @@ async function getTrendingTokens(filters) {
     for (const [index, element] of solanaTokens.entries()) {
       await sleep(index * 1000); // Staggered delay to avoid rate limits
       try {
+         const highFee =await checkTokenTransferFee(element.tokenAddress);
+         console.log("highFee =====>>>>>",highFee);
+         if (highFee !== 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb') {
         const response = await fetch(`https://api.dexscreener.com/tokens/v1/${element.chainId}/${element.tokenAddress}`);
         const tokenData = await response.json();
 
         for (const data of tokenData) {
-          if (await isSafeToken(data)) {
-            bestTokens.push(data);
-          }
+          bestTokens.push(data);
+
+          // if (await isSafeToken(data)) {
+          // }
         }
 
-        if (tokenData.length > 0 && balance > 0.01) {
+        if (tokenData.length > 0 && balance > 0.020) {
           console.log("bestTokens",bestTokens);
           const intraday = await getGrokResponse(tokenData, balance);
           if (!intraday) {
@@ -251,7 +284,9 @@ async function getTrendingTokens(filters) {
           }
 
           console.log("Intraday Recommendation:", intraday);
-          if (intraday.confidence >= 0.8 && intraday.recommendation.action === 'BUY' && intraday.recommendation.address !== 'Ddm4DTxNZxABUYm2A87TFLY6GDG2ktM2eJhGZS3EbzHM') {
+          if (intraday.confidence >= 0.8 && intraday.recommendation.action === 'BUY' && intraday.recommendation.address !== 'Ddm4DTxNZxABUYm2A87TFLY6GDG2ktM2eJhGZS3EbzHM'
+            && intraday.recommendation.address !== 'G9Zo2oUJx1CWjTDrNdrpCSgXvsuUcH4aRPvkj7WjHMuw'
+          ) {
             bot.sendMessage(chatId, `
               🎯 Best Trading Opportunity:
               Token: ${intraday.recommendation.token}
@@ -263,14 +298,14 @@ async function getTrendingTokens(filters) {
             const investAmount = balance - intraday.recommendation.investAmount ;
             console.log("43535664757 ===========",typeof balance ,typeof intraday.recommendation.investAmount)
             const tradeAmount = intraday.recommendation.investAmount * 1e9; // Convert SOL to lamports
-            console.log("43535664757 ===========>>>>>>>>",investAmount > 0.011)
+            console.log("43535664757 ===========>>>>>>>>",investAmount > 0.020)
             // 
-            if(investAmount > 0.011){
+            if(investAmount > 0.020){
             console.log("43535664757 ===========>>>>>>>>000")
 
             await swapTokens(Math.round(tradeAmount), intraday.recommendation.address,intraday);
             }else{
-              console.log("Buying stop, Reserve balance is 0.011")
+              console.log("Buying stop, Reserve balance is 0.020")
             //  bot.sendMessage('❌ Buying stop, Reserve balance is 0.011');
             bot.sendMessage(chatId, '❌ No balance');
 
@@ -279,6 +314,7 @@ async function getTrendingTokens(filters) {
             bot.sendMessage(chatId, '❌ Confidence too low or no BUY signal');
           }
         }
+      }
       } catch (error) {
         console.error(`Error processing token ${element.tokenAddress}:`, error);
       }
@@ -308,7 +344,8 @@ async function getGrokSellResponse(tokenData) {
       resolvedData = tokenData; // Use as-is if not a Promise
     }
 
-    console.log("resolved data ===>>>", resolvedData);
+    // console.log("resolved data ===>>>", resolvedData);
+
 
     const completion = await client.chat.completions.create({
       model: "grok-2-latest",
@@ -320,28 +357,27 @@ async function getGrokSellResponse(tokenData) {
         {
           role: "user",
           content: `
-            As Grok 3, a crypto trading analyst built by xAI, you’re optimized for short-term trading insights with real-time data analysis. Today is March 16, 2025. Analyze the following token data from DEXscreener, including the current price (\`priceUsd\`) and my buy price (\`buy_price\`), to decide whether to sell for profit, sell on a loss, or hold:
-
+            As Grok 3, a crypto trading analyst built by xAI, you’re optimized for short-term trading insights with real-time data analysis. Today is March 17, 2025. Analyze the following token data from DEXscreener, including the current price (\`priceUsd\`) and my buy price (\`buy_price\`), to decide whether to sell for profit, sell on a loss, or hold:
+    
             ${JSON.stringify(resolvedData, null, 2)}
-
+    
             Evaluate the token based on:
             1. **Profit/Loss Calculation**: 
                - Compare \`priceUsd\` (current price) with \`buy_price\`.
                - Target a minimum 2% net profit after fees (e.g., 0.5% fee deducted); sell if profit ≥ 2%.
-               - If momentum is strong (m5 > +5% or h1 > +10%), target >2% profit (e.g., 5-10%) before selling.
                - Sell if loss ≥ -5% (i.e., \`priceUsd\` < 95% of \`buy_price\`), regardless of other signals.
             2. **Momentum**: 
-               - Use \`priceChange\` (m5: 5-min, h1: 1-hour); sell if m5 < -5% *and* h1 < -10% with declining volume, hold if m5 > +2% or h1 > +5%.
+               - Use \`priceChange\` (m5: 5-min, h1: 1-hour); only consider momentum if profit < 2% and loss > -5%.
             3. **Volume**: 
-               - Require \`volume.m5\` > $1000 and \`volume.h1\` > $10k; sell if volume drops >25% from h1 with negative price action.
+               - Require \`volume.m5\` > $10,000 and \`volume.h1\` > $10k; only consider volume if profit < 2% and loss > -5%.
             4. **Liquidity**: 
-               - Filter out tokens with \`liquidity.usd\` < $10,000; sell if liquidity is insufficient to support price stability.
-
+               - Filter out tokens with \`liquidity.usd\` < $10,000; only consider liquidity if profit < 2% and loss > -5%.
+    
             Rules:
-            - **Sell for Profit**: Sell if profit ≥ 2% after fees; if momentum is strong (m5 > +5% or h1 > +10%) and volume holds, wait for >2% (e.g., 5-10%) before selling.
-            - **Sell on Loss**: Exit if loss ≥ -5% (i.e., \`priceUsd\` < 95% of \`buy_price\`), or if m5 < -5% *and* h1 < -10% with declining volume.
+            - **Sell for Profit**: Sell if profit ≥ 2% after fees, regardless of momentum or volume.
+            - **Sell on Loss**: Exit if loss ≥ -5% (i.e., \`priceUsd\` < 95% of \`buy_price\`), regardless of other signals.
             - **Hold**: Default if profit < 2%, loss > -5%, and momentum (m5 > +2% or h1 > +5%) or volume suggests upside.
-
+    
             Output in JSON:
             {
               "recommendation": {
@@ -354,7 +390,7 @@ async function getGrokSellResponse(tokenData) {
               "reasoning": "2-3 sentences on profit/loss, momentum, and volume/liquidity trends",
               "confidence": "0-1 score (e.g., 0.9 for strong SELL, 0.7 for HOLD)"
             }
-
+    
             Return the recommendation for the token; default to "HOLD" unless sell signals (profit ≥ 2% or loss ≤ -5%) are clear.
           `
         }
@@ -649,13 +685,13 @@ async function autoSellLoop() {
               });
           });
   
-          console.log("allTokens", allTokens);
+          // console.log("allTokens", allTokens);
                   // Extract the mint addresses of purchased tokens
         const purchasedTokenMints = tokens.map(token => token.mint);
 
         // Filter out tokens that are not in the purchased tokens list
         const tokensToDelete = allTokens.filter(token => !purchasedTokenMints.includes(token.address));
-          console.log("tokensToDelete",tokensToDelete)
+          // console.log("tokensToDelete",tokensToDelete)
           // Continue with your token processing...
           // Delete tokens that are not in the purchased tokens list
         if (tokensToDelete.length > 0) {
@@ -697,7 +733,7 @@ async function autoSellLoop() {
       }, 2000);
       
       try {
-        console.log("111111111111111111111111",)
+        // console.log("111111111111111111111111",)
         // Process tokens only if we're still auto-trading
         if (isAutoTrading && validTokens.length > 0) {
           // Process tokens in series instead of parallel for better control
@@ -706,13 +742,13 @@ async function autoSellLoop() {
             if (!isAutoTrading) break;
             
             try {
-        console.log("222222222222222222222")
+        // console.log("222222222222222222222")
 
               const response = await fetch(`https://api.dexscreener.com/tokens/v1/solana/${token.mint}`);
               const tokenData = await response.json();
-              console.log("tokenData =======>>",tokenData)
+              // console.log("tokenData =======>>",tokenData)
                db.query(`SELECT * FROM transactions WHERE address = '${token.mint}'`, async function (err, result) {
-                console.log('result', err);
+                // console.log('result', err);
                 if (err) {
                   // return result.json(err);
                 }
@@ -721,9 +757,6 @@ async function autoSellLoop() {
                     const sumBuyPrice = result.reduce((sum, transaction) => {
                       return sum + parseFloat(transaction.buy_price);
                   }, 0);
-                  console.log('result transaction table', result);
-
-                  console.log('Sum of buy_price:', sumBuyPrice);
 
                   //  result;
                   const sellData = await tokenData.map(async (t) => (
@@ -920,6 +953,98 @@ async function transferTokens(fromAddress, tokenAddress, toAddress, amount) {
 }
 
 
+
+async function checkTokenTransferFee(mintAddress) {
+    try {
+        const connection = new Connection('https://api.mainnet-beta.solana.com');
+        const mintPublicKey = new PublicKey(mintAddress);
+        const accountInfo = await connection.getAccountInfo(mintPublicKey);
+        
+        if (!accountInfo) {
+            console.log('Mint account not found');
+            return;
+        }
+
+        const owner = accountInfo.owner.toString();
+        console.log('Token Program Owner:', owner);
+        return owner;
+        if (owner === 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb') {
+            console.log('This token uses Token-2022 program');
+            
+            const data = accountInfo.data;
+            console.log('Data length:', data.length);
+
+            // Check for transfer hook program
+            // Look for hook program identifier in the data
+            let hookProgramFound = false;
+            for (let i = 0; i < data.length - 32; i++) {
+                try {
+                    // Look for the extension type for transfer hook (type 10)
+                    const extensionType = data.readUInt16LE(i);
+                    if (extensionType === 10) {
+                        console.log('\nTransfer Hook Extension found at offset:', i);
+                        
+                        // Try to read the program ID that handles the transfer hook
+                        const programIdBytes = data.slice(i + 4, i + 36);
+                        const programId = new PublicKey(programIdBytes);
+                        console.log('Transfer Hook Program:', programId.toString());
+                        
+                        hookProgramFound = true;
+                        
+                        // Get the hook program's account info
+                        try {
+                            const hookProgramInfo = await connection.getAccountInfo(programId);
+                            if (hookProgramInfo) {
+                                console.log('Hook Program exists');
+                                console.log('Hook Program data size:', hookProgramInfo.data.length);
+                            }
+                        } catch (e) {
+                            console.log('Error fetching hook program info:', e);
+                        }
+                    }
+                } catch (e) {
+                    continue;
+                }
+            }
+
+            if (hookProgramFound) {
+                console.log('\nWARNING: This token uses transfer hooks which may implement a 10% transfer fee');
+                console.log('The fee is likely implemented in the transfer hook program');
+            }
+
+            // Print relevant sections of the data for analysis
+            console.log('\nRelevant data sections:');
+            
+            // Check specific offsets where transfer fee info might be stored
+            const relevantOffsets = [160, 224, 256];
+            for (const offset of relevantOffsets) {
+                console.log(`\nOffset ${offset}:`);
+                const chunk = data.slice(offset, offset + 32);
+                console.log(Buffer.from(chunk).toString('hex'));
+                
+                // Try to interpret potential fee values
+                try {
+                    const possibleFee = data.readUInt16LE(offset);
+                    if (possibleFee > 0 && possibleFee <= 10000) {
+                        console.log(`Possible fee at ${offset}: ${(possibleFee/100).toFixed(2)}%`);
+                    }
+                } catch (e) {}
+            }
+        }
+        
+    } catch (error) {
+        console.error('Error checking transfer fee:', error);
+        if (error.logs) {
+            console.error('Error logs:', error.logs);
+        }
+    }
+}
+
+// Test with your token mint
+// const tokenMint = 'GmMautNDHVBsaxt2W38SMi2kqAgrG1HZJkHhdE7Ypump';
+// // checkTokenTransferFee(tokenMint);
+
 // ✅ Telegram Bot Ready
 bot.on('polling_error', (error) => console.log('Telegram Error:', error.message));
 bot.sendMessage(chatId, '🤖 Bot is online! Send /start to start a swap.');
+
