@@ -102,6 +102,7 @@ const client = new OpenAI({
     apiKey: XAI_API_KEY,
     baseURL: "https://api.x.ai/v1",
 });
+// - ✅ **5m & 1h price change must be positive** (>+2% preferred).
 
 async function getGrokResponse(tokenData, userBalance) {
   try {
@@ -129,13 +130,10 @@ async function getGrokResponse(tokenData, userBalance) {
                 - ❌ Reject if **liquidity < $10k** or **volume too low**.
         
             2️⃣ **Momentum Analysis**:
-                - ✅ **5m & 1h price change must be positive** (>+2% preferred).
                 - ❌ Reject if **price drops > -20% in any timeframe**.
         
             3️⃣ **Security & Tax Detection**:
                 - ✅ Contract must be **at least 6 hours old** (check \`pairCreatedAt\` timestamp).
-                - ❌ Reject if **buy/sell taxes > 5%** (if tax data is unavailable, check volume, liquidity, and market momentum).
-                - ❌ **Reject tokens with a transfer fee that automatically buys the token upon transfer/minting** (detect this via tokenomics, past transactions, or on-chain data).
                 - ❌ Reject if rug pull signs (e.g., sudden liquidity drop) or honeypot detected.
         
             **Output JSON**:
@@ -156,8 +154,7 @@ async function getGrokResponse(tokenData, userBalance) {
             **Important**:
             - Return *only* a valid JSON object, with no additional text outside the JSON.
             - If tax information is missing, check volume, liquidity, and market momentum.
-            - **Reject tokens that apply a transfer fee and auto-buy the token when transferred/minted.**
-            - Use the current timestamp (March 17, 2025) to calculate contract age from \`pairCreatedAt\`.
+            - Use the current timestamp Today to calculate contract age from \`pairCreatedAt\`.
           `
         }        
         
@@ -346,6 +343,7 @@ async function getGrokSellResponse(tokenData) {
 
     // console.log("resolved data ===>>>", resolvedData);
 
+    // - **Hold**: Default if profit < 2%, loss > -3%, and momentum (m5 > +2% or h1 > +5%) or volume suggests upside.
 
     const completion = await client.chat.completions.create({
       model: "grok-2-latest",
@@ -357,27 +355,27 @@ async function getGrokSellResponse(tokenData) {
         {
           role: "user",
           content: `
-            As Grok 3, a crypto trading analyst built by xAI, you’re optimized for short-term trading insights with real-time data analysis. Today is March 17, 2025. Analyze the following token data from DEXscreener, including the current price (\`priceUsd\`) and my buy price (\`buy_price\`), to decide whether to sell for profit, sell on a loss, or hold:
-    
+            As Grok 3, a crypto trading analyst built by xAI, you’re optimized for short-term trading insights with real-time data analysis. Today. Analyze the following token data from DEXscreener, including the current price (\`priceUsd\`) and my buy price (\`buy_price\`), to decide whether to sell for profit, sell on loss, or hold:
+            
             ${JSON.stringify(resolvedData, null, 2)}
-    
+            
             Evaluate the token based on:
             1. **Profit/Loss Calculation**: 
                - Compare \`priceUsd\` (current price) with \`buy_price\`.
                - Target a minimum 2% net profit after fees (e.g., 0.5% fee deducted); sell if profit ≥ 2%.
-               - Sell if loss ≥ -5% (i.e., \`priceUsd\` < 95% of \`buy_price\`), regardless of other signals.
+               - Sell if loss ≥ -3% (i.e., \`priceUsd\` ≤ 97% of \`buy_price\`).
             2. **Momentum**: 
-               - Use \`priceChange\` (m5: 5-min, h1: 1-hour); only consider momentum if profit < 2% and loss > -5%.
+               - Use \`priceChange\` (m5: 5-min, h1: 1-hour); only consider momentum if profit < 2% and loss > -3%.
             3. **Volume**: 
-               - Require \`volume.m5\` > $10,000 and \`volume.h1\` > $10k; only consider volume if profit < 2% and loss > -5%.
+               - Require \`volume.m5\` > $5000 and \`volume.h1\` > $5k; only consider volume if profit < 2% and loss > -3%.
             4. **Liquidity**: 
-               - Filter out tokens with \`liquidity.usd\` < $10,000; only consider liquidity if profit < 2% and loss > -5%.
-    
+               - Filter out tokens with \`liquidity.usd\` < $5000; only consider liquidity if profit < 2% and loss > -3%.
+            
             Rules:
-            - **Sell for Profit**: Sell if profit ≥ 2% after fees, regardless of momentum or volume.
-            - **Sell on Loss**: Exit if loss ≥ -5% (i.e., \`priceUsd\` < 95% of \`buy_price\`), regardless of other signals.
-            - **Hold**: Default if profit < 2%, loss > -5%, and momentum (m5 > +2% or h1 > +5%) or volume suggests upside.
-    
+            - **Sell for Profit**: Sell if profit ≥ 2% after fees, regardless of momentum, volume, or liquidity.
+            - **Sell on Loss**: Sell if loss ≥ -3% (i.e., \`priceUsd\` ≤ 97% of \`buy_price\`), regardless of momentum, volume, or liquidity.
+            - **Hold**: Default if profit < 2% and loss > -3%.
+            
             Output in JSON:
             {
               "recommendation": {
@@ -385,20 +383,19 @@ async function getGrokSellResponse(tokenData) {
                 "symbol": "symbol",
                 "address": "address",
                 "action": "SELL" | "HOLD",
-                "profit_loss_percent": "calculated profit/loss % (e.g., +3.5% or -6.2%)"
+                "profit_loss_percent": "calculated profit/loss % (e.g., +3.5% or -3.2%)"
               },
-              "reasoning": "2-3 sentences on profit/loss, momentum, and volume/liquidity trends",
-              "confidence": "0-1 score (e.g., 0.9 for strong SELL, 0.7 for HOLD)"
+              "reasoning": "2-3 sentences on profit/loss, momentum, and volume/liquidity trends (only include momentum/volume/liquidity if HOLD)",
+              "confidence": "0-1 score (e.g., 0.8 for strong SELL, 0.7 for HOLD)"
             }
-    
-            Return the recommendation for the token; default to "HOLD" unless sell signals (profit ≥ 2% or loss ≤ -5%) are clear.
+            
+            Return the recommendation for the token; default to "HOLD" unless sell signals (profit ≥ 2% or loss ≥ -3%) are clear.
           `
         }
       ],
       max_tokens: 300,
       temperature: 0.5
     });
-
     console.log("completion======>>>", completion.choices[0]);
 
     let rawContent = completion.choices[0].message.content.trim();
@@ -435,7 +432,7 @@ async function checkBalance() {
 
 async function swapTokens(amount, outputToken,intraday, isSell = false, slippageBps = SLIPPAGE) {
   const action = isSell ? "Selling" : "Buying";
-
+console.log("slippageBps =>>>>",slippageBps);
   try {
     bot.sendMessage(chatId, `🔄 ${action} token... Fetching swap details`);
 
@@ -445,10 +442,12 @@ async function swapTokens(amount, outputToken,intraday, isSell = false, slippage
       : `https://api.jup.ag/swap/v1/quote?inputMint=${INPUT_TOKEN}&outputMint=${outputToken}&amount=${amount}&slippageBps=${slippageBps}`;
     const quoteResponse = await fetch(quoteUrl);
     const quote = await quoteResponse.json();
+    console.log("quote =>>>>", quote);
     if (quote.error) throw new Error("No swap route available");
 
     // Step 2: Fetch a fresh blockhash *before* creating the transaction
     const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("finalized");
+    console.log("blockhash =>>>>", blockhash);
 
     // Step 3: Create the swap transaction with the fresh blockhash
     const swapResponse = await fetch('https://api.jup.ag/swap/v1/swap', {
@@ -462,19 +461,20 @@ async function swapTokens(amount, outputToken,intraday, isSell = false, slippage
         // Optionally pass the blockhash to Jupiter if supported (check API docs)
       })
     });
+    console.log("swapResponse ====>>>>",swapResponse)
     const swapData = await swapResponse.json();
     if (!swapData?.swapTransaction) throw new Error('Failed to get swap transaction');
 
     // Step 4: Deserialize and sign the transaction
     const transaction = VersionedTransaction.deserialize(Buffer.from(swapData.swapTransaction, 'base64'));
     transaction.sign([keypair]);
-
+   console.log("transaction ====>>>",transaction)
     // Step 5: Send the transaction with retries and preflight
     const signature = await connection.sendRawTransaction(transaction.serialize(), {
       maxRetries: 5, // Increase retries
       skipPreflight: false, // Enable preflight to catch issues early
     });
-
+    console.log("signature =>>>>", signature);
     // Step 6: Confirm the transaction using the same blockhash
     const confirmation = await connection.confirmTransaction(
       {
@@ -802,8 +802,8 @@ async function autoSellLoop() {
 
                   if (grokResponse?.recommendation?.action === "SELL") {
                     const decimals = 6; // Replace with actual token decimals
-                    const amountToSell = Math.floor(Number(token.balance) * (10 ** decimals));
-                    // const amountToSell = Math.max(1, Math.floor(Number(token.balance) * 0.999));
+                    // const amountToSell = Math.floor(Number(token.balance) * (10 ** decimals));
+                    const amountToSell = Math.max(1, Math.floor(Number(token.balance) * 0.999));
                     const failedFromSell = await sellWithRetry(
                       fromAddress,
                       grokResponse.recommendation.address,
@@ -968,70 +968,7 @@ async function checkTokenTransferFee(mintAddress) {
         const owner = accountInfo.owner.toString();
         console.log('Token Program Owner:', owner);
         return owner;
-        if (owner === 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb') {
-            console.log('This token uses Token-2022 program');
-            
-            const data = accountInfo.data;
-            console.log('Data length:', data.length);
-
-            // Check for transfer hook program
-            // Look for hook program identifier in the data
-            let hookProgramFound = false;
-            for (let i = 0; i < data.length - 32; i++) {
-                try {
-                    // Look for the extension type for transfer hook (type 10)
-                    const extensionType = data.readUInt16LE(i);
-                    if (extensionType === 10) {
-                        console.log('\nTransfer Hook Extension found at offset:', i);
-                        
-                        // Try to read the program ID that handles the transfer hook
-                        const programIdBytes = data.slice(i + 4, i + 36);
-                        const programId = new PublicKey(programIdBytes);
-                        console.log('Transfer Hook Program:', programId.toString());
-                        
-                        hookProgramFound = true;
-                        
-                        // Get the hook program's account info
-                        try {
-                            const hookProgramInfo = await connection.getAccountInfo(programId);
-                            if (hookProgramInfo) {
-                                console.log('Hook Program exists');
-                                console.log('Hook Program data size:', hookProgramInfo.data.length);
-                            }
-                        } catch (e) {
-                            console.log('Error fetching hook program info:', e);
-                        }
-                    }
-                } catch (e) {
-                    continue;
-                }
-            }
-
-            if (hookProgramFound) {
-                console.log('\nWARNING: This token uses transfer hooks which may implement a 10% transfer fee');
-                console.log('The fee is likely implemented in the transfer hook program');
-            }
-
-            // Print relevant sections of the data for analysis
-            console.log('\nRelevant data sections:');
-            
-            // Check specific offsets where transfer fee info might be stored
-            const relevantOffsets = [160, 224, 256];
-            for (const offset of relevantOffsets) {
-                console.log(`\nOffset ${offset}:`);
-                const chunk = data.slice(offset, offset + 32);
-                console.log(Buffer.from(chunk).toString('hex'));
-                
-                // Try to interpret potential fee values
-                try {
-                    const possibleFee = data.readUInt16LE(offset);
-                    if (possibleFee > 0 && possibleFee <= 10000) {
-                        console.log(`Possible fee at ${offset}: ${(possibleFee/100).toFixed(2)}%`);
-                    }
-                } catch (e) {}
-            }
-        }
-        
+      
     } catch (error) {
         console.error('Error checking transfer fee:', error);
         if (error.logs) {
