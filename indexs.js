@@ -649,81 +649,340 @@ async function autoBuyLoop() {
 }
 
 // Sell loop with improved stop handling
+// async function autoSellLoop() {
+//   const failedTokens = new Set(); // Persistent blacklist across loop iterations
+//   // Track when stop was requested for timeout enforcement
+//   let stopRequestTime = null;
+  
+//   while (isAutoTrading || (stopRequestTime && Date.now() - stopRequestTime < 20000)) {
+//     try {
+//       // Check if stop was requested and set the time if not already set
+//       if (!isAutoTrading && !stopRequestTime) {
+//         stopRequestTime = Date.now();
+//         console.log('Stop requested in sellLoop, will exit within 20 seconds');
+//         bot.sendMessage(chatId, '🛑 Sell loop will stop within 20 seconds...');
+//       }
+      
+//       // Force stop after 20 seconds from stop request
+//       if (stopRequestTime && Date.now() - stopRequestTime >= 20000) {
+//         console.log('Forcing sell loop to stop after timeout');
+//         break;
+//       }
+//       // Fetch purchased tokens
+//         const tokens = await getPurchasedTokens(fromAddress);
+//         console.log("purchased token ===>>>", tokens);
+//         let allTokens;
+//         // Fetch all tokens from the database
+//         try {
+//           const sqlquery = "SELECT * FROM transactions";
+//           const allTokens = await new Promise((resolve, reject) => {
+//               db.query(sqlquery, (error, results) => {
+//                   if (error) {
+//                       reject(error);
+//                       return;
+//                   }
+//                   resolve(results);
+//               });
+//           });
+  
+//           // console.log("allTokens", allTokens);
+//                   // Extract the mint addresses of purchased tokens
+//         const purchasedTokenMints = tokens.map(token => token.mint);
+
+//         // Filter out tokens that are not in the purchased tokens list
+//         const tokensToDelete = allTokens.filter(token => !purchasedTokenMints.includes(token.address));
+//           // console.log("tokensToDelete",tokensToDelete)
+//           // Continue with your token processing...
+//           // Delete tokens that are not in the purchased tokens list
+//         if (tokensToDelete.length > 0) {
+//             for (const token of tokensToDelete) {
+//                 await db.query('DELETE FROM transactions WHERE hash = ?', [token.hash]); // Adjust the query as per your database schema
+//                 console.log(`Deleted token with mint: ${token.address}`);
+//             }
+//         } else {
+//             console.log('No tokens to delete.');
+//         }
+  
+//       } catch (error) {
+//           console.error("Database error:", error);
+//           // Handle the error appropriately
+//       }
+
+        
+//       if (!tokens.length || !isAutoTrading) {
+//         if (!isAutoTrading) {
+//           await sleep(1000); // Short sleep when stopping
+//           continue;
+//         }
+        
+//         bot.sendMessage(chatId, 'ℹ️ No tokens to sell');
+//         await sleep(30000);
+//         continue;
+//       }
+
+//       // Filter out blacklisted tokens
+//       const validTokens = tokens.filter(token => !failedTokens.has(token.mint));
+
+//       // Setup a timeout to check isAutoTrading during long operations
+//       const checkStopInterval = setInterval(() => {
+//         if (!isAutoTrading && !stopRequestTime) {
+//           stopRequestTime = Date.now();
+//           console.log('Stop detected during token selling operations');
+//           bot.sendMessage(chatId, '🛑 Stopping sell operations...');
+//         }
+//       }, 2000);
+      
+//       try {
+//         // console.log("111111111111111111111111",)
+//         // Process tokens only if we're still auto-trading
+//         if (isAutoTrading && validTokens.length > 0) {
+//           // Process tokens in series instead of parallel for better control
+//           for (const token of validTokens) {
+//             // Check if stop was requested before each token
+//             if (!isAutoTrading) break;
+            
+//             try {
+//         // console.log("222222222222222222222")
+
+//               const response = await fetch(`https://api.dexscreener.com/tokens/v1/solana/${token.mint}`);
+//               const tokenData = await response.json();
+//               // console.log("tokenData =======>>",tokenData)
+//                db.query(`SELECT * FROM transactions WHERE address = '${token.mint}'`, async function (err, result) {
+//                 // console.log('result', err);
+//                 if (err) {
+//                   // return result.json(err);
+//                 }
+//                 else {
+//                   await result;
+//                     const sumBuyPrice = result.reduce((sum, transaction) => {
+//                       return sum + parseFloat(transaction.buy_price);
+//                   }, 0);
+
+//                   //  result;
+//                   const sellData = await tokenData.map(async (t) => (
+
+//                     {
+//                       name: t.baseToken.name || "Unknown",
+//                       symbol: t.baseToken.symbol || "UNKNOWN",
+//                       address: t.baseToken.address,
+//                       priceUsd: t.priceUsd || 0, // Current price in USD
+//                       priceNative: t.priceNative || 0, // Price in SOL
+//                       priceChange: {
+//                         m5: t.priceChange?.m5 || 0, // 5-min change
+//                         h1: t.priceChange?.h1 || 0, // 1-hour change
+//                         h6: t.priceChange?.h6 || 0, // 6-hour change
+//                         h24: t.priceChange?.h24 || 0 // 24-hour change
+//                       },
+//                       volume: {
+//                         m5: t.volume?.m5 || 0,
+//                         h1: t.volume?.h1 || 0,
+//                         h6: t.volume?.h6 || 0,
+//                         h24: t.volume?.h24 || 0
+//                       },
+//                       liquidity: {
+//                         usd: t.liquidity?.usd || 0,
+//                         base: t.liquidity?.base || 0, // Base token amount in pool
+//                         quote: t.liquidity?.quote || 0 // Quote token (e.g., SOL) amount
+//                       },
+//                       marketCap: t.marketCap || 0, // Market cap for valuation
+
+
+//                       fdv: t.fdv || 0, // Fully diluted valuation
+//                       holding_amount: token.balance || 0, // Your holding amount
+//                       buy_price: sumBuyPrice ? (sumBuyPrice / result.length) : (t.priceUsd * 1.01) || t.priceUsd * 0.01, // Your buy price
+//                     }));
+
+//                   // Check stop status before continuing
+//                   // if (!isAutoTrading) break;
+//                   console.log("sellData ==>>", sellData);
+//                   const grokResponse = await getGrokSellResponse(sellData);
+//                   console.log("grokResponseSell ==>>", grokResponse);
+//                   // Check stop status before continuing
+//                   // if (!isAutoTrading) break;
+
+//                   if (grokResponse?.recommendation?.action === "SELL") {
+//                     const decimals = 6; // Replace with actual token decimals
+//                     // const amountToSell = Math.floor(Number(token.balance) * (10 ** decimals));
+//                     const amountToSell = Math.max(1, Math.floor(Number(token.balance) * 0.999));
+//                     const failedFromSell = await sellWithRetry(
+//                       fromAddress,
+//                       grokResponse.recommendation.address,
+//                       tokenOut, // Assuming tokenOut is defined
+//                       amountToSell,
+//                       SLIPPAGE, // Initial slippage
+//                       chatId
+//                     );
+//                     // Add any newly failed tokens to the blacklist
+//                     // failedFromSell.forEach(token => failedTokens.add(token));
+//                     bot.sendMessage(chatId, `💰 Sold ${grokResponse.recommendation.symbol}`);
+//                   }
+//                 }
+//               })    
+             
+//             } catch (error) {
+//               console.error(`Error processing sell for ${token.mint}:`, error);
+//               if (error.message.includes("No swap route available")) {
+//                 failedTokens.add(token.mint);
+//               }
+//             }
+//           }
+//         }
+//       } finally {
+//         clearInterval(checkStopInterval); // Always clear the interval
+//       }
+
+//       // Check if stop is requested before sleeping
+//       if (!isAutoTrading) {
+//         await sleep(1000); // Short sleep to allow for stop processing
+//       } else {
+//         await sleep(30000); // Normal interval between operations
+//       }
+//     } catch (error) {
+//       console.error('Sell loop error:', error);
+//       if (isAutoTrading) {
+//         bot.sendMessage(chatId, '⚠️ Sell loop paused due to error');
+//       }
+//       await sleep(5000); // Shorter wait on error when stopping
+//     }
+//   }
+  
+//   console.log('Sell loop has stopped');
+//   bot.sendMessage(chatId, '✅ Sell loop has stopped completely');
+// }
+
+// async function sellWithRetry(fromAddress, tokenAddress, tokenOut, amount, initialSlippage = 100, chatId, maxRetries = 3) {
+//   let slippage = initialSlippage;
+//   let sellAmount = amount;
+//   const failedTokens = new Set();
+
+
+//   for (let attempt = 1; attempt <= maxRetries; attempt++) {
+//     try {
+//       // console.log("failedTokens.has(tokenAddress)",failedTokens.has(tokenAddress))
+//       // if(failedTokens.has(tokenAddress)){
+//       await sellToken(fromAddress, tokenAddress, tokenOut, sellAmount, slippage, 0, chatId);
+//       bot.sendMessage(chatId, `✅ Sold ${sellAmount} of ${tokenAddress} successfully!`);
+//       return;
+//       // }
+//     } catch (error) {
+//       console.error(`Sell attempt ${attempt} failed for ${tokenAddress}:`, error.message);
+
+//       if (error.message === "No swap route available") {
+//         if (attempt === 1 && sellAmount > 0.01) { // Avoid infinite reduction
+//           sellAmount = sellAmount / 2;
+//           console.log(`Reducing amount to ${sellAmount} for retry...`);
+//           continue;
+//         } else {
+//           failedTokens.add(tokenAddress);
+//           bot.sendMessage(chatId, `❌ No swap route for ${tokenAddress}. Blacklisting token.`);
+//           // throw new Error(`Sell failed: No swap route available for ${tokenAddress}`);
+//         }
+//       }
+
+//       if (attempt === maxRetries) {
+//         bot.sendMessage(chatId, `❌ Failed to sell ${tokenAddress} after ${maxRetries} attempts. Burning token...`);
+//         await burnToken(fromAddress, tokenAddress, amount, chatId);
+//         return;
+//       }
+
+//       slippage = Math.min(initialSlippage + (attempt * 200), 1000);
+//       console.log(`Retrying sell with slippage ${slippage} and amount ${sellAmount} (attempt ${attempt + 1}/${maxRetries})...`);
+//       await sleep(5000 * attempt);
+//     }
+//   }
+//   return failedTokens;
+// }
+
+
+async function sellWithRetry(fromAddress, tokenAddress, tokenOut, amount, initialSlippage = 100, chatId, maxRetries = 3) {
+  let slippage = initialSlippage;
+  const failedTokens = new Set();
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      bot.sendMessage(chatId, `🔄 Attempting to sell ${amount} of ${tokenAddress} (Attempt ${attempt}/${maxRetries}) with slippage ${slippage/100}%`);
+      await sellToken(fromAddress, tokenAddress, tokenOut, amount, slippage, 0, chatId);
+      bot.sendMessage(chatId, `✅ Sold ${amount} of ${tokenAddress} successfully in one transaction!`);
+      return; // Exit on success
+    } catch (error) {
+      console.error(`Sell attempt ${attempt} failed for ${tokenAddress}:`, error.message);
+
+      if (error.message.includes("No swap route available") || error.message.includes("Slippage")) {
+        if (attempt === maxRetries) {
+          failedTokens.add(tokenAddress);
+          bot.sendMessage(chatId, `❌ Failed to sell ${tokenAddress} after ${maxRetries} attempts. Blacklisting token.`);
+          await burnToken(fromAddress, tokenAddress, amount, chatId); // Burn if all retries fail
+          break;
+        }
+
+        // Increase slippage for the next attempt (e.g., 1% -> 3% -> 5%)
+        slippage = Math.min(initialSlippage + (attempt * 200), 1000); // Cap at 10%
+        console.log(`Retrying with slippage ${slippage/100}% (attempt ${attempt + 1}/${maxRetries})...`);
+        await sleep(5000 * attempt); // Exponential backoff
+      } else {
+        // Non-recoverable error (e.g., insufficient balance), stop retrying
+        bot.sendMessage(chatId, `❌ Sell failed for ${tokenAddress}: ${error.message}`);
+        break;
+      }
+    }
+  }
+  return failedTokens;
+}
+
 async function autoSellLoop() {
   const failedTokens = new Set(); // Persistent blacklist across loop iterations
-  // Track when stop was requested for timeout enforcement
   let stopRequestTime = null;
-  
+
   while (isAutoTrading || (stopRequestTime && Date.now() - stopRequestTime < 20000)) {
     try {
-      // Check if stop was requested and set the time if not already set
       if (!isAutoTrading && !stopRequestTime) {
         stopRequestTime = Date.now();
         console.log('Stop requested in sellLoop, will exit within 20 seconds');
         bot.sendMessage(chatId, '🛑 Sell loop will stop within 20 seconds...');
       }
-      
-      // Force stop after 20 seconds from stop request
+
       if (stopRequestTime && Date.now() - stopRequestTime >= 20000) {
         console.log('Forcing sell loop to stop after timeout');
         break;
       }
+
       // Fetch purchased tokens
-        const tokens = await getPurchasedTokens(fromAddress);
-        console.log("purchased token ===>>>", tokens);
-        let allTokens;
-        // Fetch all tokens from the database
-        try {
-          const sqlquery = "SELECT * FROM transactions";
-          const allTokens = await new Promise((resolve, reject) => {
-              db.query(sqlquery, (error, results) => {
-                  if (error) {
-                      reject(error);
-                      return;
-                  }
-                  resolve(results);
-              });
-          });
-  
-          // console.log("allTokens", allTokens);
-                  // Extract the mint addresses of purchased tokens
-        const purchasedTokenMints = tokens.map(token => token.mint);
+      const tokens = await getPurchasedTokens(fromAddress);
+      console.log("Purchased tokens ===>>>", tokens);
 
-        // Filter out tokens that are not in the purchased tokens list
-        const tokensToDelete = allTokens.filter(token => !purchasedTokenMints.includes(token.address));
-          // console.log("tokensToDelete",tokensToDelete)
-          // Continue with your token processing...
-          // Delete tokens that are not in the purchased tokens list
-        if (tokensToDelete.length > 0) {
-            for (const token of tokensToDelete) {
-                await db.query('DELETE FROM transactions WHERE hash = ?', [token.hash]); // Adjust the query as per your database schema
-                console.log(`Deleted token with mint: ${token.address}`);
-            }
-        } else {
-            console.log('No tokens to delete.');
-        }
-  
-      } catch (error) {
-          console.error("Database error:", error);
-          // Handle the error appropriately
-      }
-
-        
       if (!tokens.length || !isAutoTrading) {
         if (!isAutoTrading) {
-          await sleep(1000); // Short sleep when stopping
+          await sleep(1000);
           continue;
         }
-        
         bot.sendMessage(chatId, 'ℹ️ No tokens to sell');
         await sleep(30000);
         continue;
       }
 
-      // Filter out blacklisted tokens
-      const validTokens = tokens.filter(token => !failedTokens.has(token.mint));
+      // Sync with database
+      try {
+        const allTokens = await new Promise((resolve, reject) => {
+          db.query("SELECT * FROM transactions", (error, results) => {
+            if (error) reject(error);
+            else resolve(results);
+          });
+        });
 
-      // Setup a timeout to check isAutoTrading during long operations
+        const purchasedTokenMints = tokens.map(token => token.mint);
+        const tokensToDelete = allTokens.filter(token => !purchasedTokenMints.includes(token.address));
+
+        if (tokensToDelete.length > 0) {
+          for (const token of tokensToDelete) {
+            await db.query('DELETE FROM transactions WHERE hash = ?', [token.hash]);
+            console.log(`Deleted token with mint: ${token.address}`);
+          }
+        }
+      } catch (error) {
+        console.error("Database sync error:", error);
+      }
+
+      const validTokens = tokens.filter(token => !failedTokens.has(token.mint));
       const checkStopInterval = setInterval(() => {
         if (!isAutoTrading && !stopRequestTime) {
           stopRequestTime = Date.now();
@@ -731,94 +990,77 @@ async function autoSellLoop() {
           bot.sendMessage(chatId, '🛑 Stopping sell operations...');
         }
       }, 2000);
-      
-      try {
-        // console.log("111111111111111111111111",)
-        // Process tokens only if we're still auto-trading
-        if (isAutoTrading && validTokens.length > 0) {
-          // Process tokens in series instead of parallel for better control
-          for (const token of validTokens) {
-            // Check if stop was requested before each token
-            if (!isAutoTrading) break;
-            
-            try {
-        // console.log("222222222222222222222")
 
+      try {
+        if (isAutoTrading && validTokens.length > 0) {
+          for (const token of validTokens) {
+            if (!isAutoTrading) break;
+
+            try {
               const response = await fetch(`https://api.dexscreener.com/tokens/v1/solana/${token.mint}`);
               const tokenData = await response.json();
-              // console.log("tokenData =======>>",tokenData)
-               db.query(`SELECT * FROM transactions WHERE address = '${token.mint}'`, async function (err, result) {
-                // console.log('result', err);
-                if (err) {
-                  // return result.json(err);
+
+              const result = await new Promise((resolve, reject) => {
+                db.query(`SELECT * FROM transactions WHERE address = '${token.mint}'`, (err, res) => {
+                  if (err) reject(err);
+                  else resolve(res);
+                });
+              });
+
+              const sumBuyPrice = result.reduce((sum, tx) => sum + parseFloat(tx.buy_price), 0);
+              const avgBuyPrice = result.length ? sumBuyPrice / result.length : tokenData[0]?.priceUsd * 1.01 || 0;
+
+              const sellData = tokenData.map(t => ({
+                name: t.baseToken.name || "Unknown",
+                symbol: t.baseToken.symbol || "UNKNOWN",
+                address: t.baseToken.address,
+                priceUsd: t.priceUsd || 0,
+                priceNative: t.priceNative || 0,
+                priceChange: {
+                  m5: t.priceChange?.m5 || 0,
+                  h1: t.priceChange?.h1 || 0,
+                  h6: t.priceChange?.h6 || 0,
+                  h24: t.priceChange?.h24 || 0
+                },
+                volume: {
+                  m5: t.volume?.m5 || 0,
+                  h1: t.volume?.h1 || 0,
+                  h6: t.volume?.h6 || 0,
+                  h24: t.volume?.h24 || 0
+                },
+                liquidity: {
+                  usd: t.liquidity?.usd || 0,
+                  base: t.liquidity?.base || 0,
+                  quote: t.liquidity?.quote || 0
+                },
+                marketCap: t.marketCap || 0,
+                fdv: t.fdv || 0,
+                holding_amount: token.balance || 0,
+                buy_price: avgBuyPrice
+              }));
+
+              const grokResponse = await getGrokSellResponse(sellData);
+              console.log("Grok Sell Response ==>>", grokResponse);
+
+              if (grokResponse?.recommendation?.action === "SELL") {
+                const fullAmount = Math.floor(Number(token.balance) * 0.999); // Sell 99.9% to avoid dust
+                const failedFromSell = await sellWithRetry(
+                  fromAddress,
+                  grokResponse.recommendation.address,
+                  tokenOut,
+                  fullAmount,
+                  SLIPPAGE,
+                  chatId
+                );
+
+                if (failedFromSell.size === 0) {
+                  // Update database only after successful sale
+                  await db.query('DELETE FROM transactions WHERE address = ?', [token.mint]);
+                  bot.sendMessage(chatId, `💰 Sold full amount of ${grokResponse.recommendation.symbol} (${fullAmount})`);
+                } else {
+                  failedTokens.add(token.mint);
                 }
-                else {
-                  await result;
-                    const sumBuyPrice = result.reduce((sum, transaction) => {
-                      return sum + parseFloat(transaction.buy_price);
-                  }, 0);
-
-                  //  result;
-                  const sellData = await tokenData.map(async (t) => (
-
-                    {
-                      name: t.baseToken.name || "Unknown",
-                      symbol: t.baseToken.symbol || "UNKNOWN",
-                      address: t.baseToken.address,
-                      priceUsd: t.priceUsd || 0, // Current price in USD
-                      priceNative: t.priceNative || 0, // Price in SOL
-                      priceChange: {
-                        m5: t.priceChange?.m5 || 0, // 5-min change
-                        h1: t.priceChange?.h1 || 0, // 1-hour change
-                        h6: t.priceChange?.h6 || 0, // 6-hour change
-                        h24: t.priceChange?.h24 || 0 // 24-hour change
-                      },
-                      volume: {
-                        m5: t.volume?.m5 || 0,
-                        h1: t.volume?.h1 || 0,
-                        h6: t.volume?.h6 || 0,
-                        h24: t.volume?.h24 || 0
-                      },
-                      liquidity: {
-                        usd: t.liquidity?.usd || 0,
-                        base: t.liquidity?.base || 0, // Base token amount in pool
-                        quote: t.liquidity?.quote || 0 // Quote token (e.g., SOL) amount
-                      },
-                      marketCap: t.marketCap || 0, // Market cap for valuation
-
-
-                      fdv: t.fdv || 0, // Fully diluted valuation
-                      holding_amount: token.balance || 0, // Your holding amount
-                      buy_price: sumBuyPrice ? (sumBuyPrice / result.length) : (t.priceUsd * 1.01) || t.priceUsd * 0.01, // Your buy price
-                    }));
-
-                  // Check stop status before continuing
-                  // if (!isAutoTrading) break;
-                  console.log("sellData ==>>", sellData);
-                  const grokResponse = await getGrokSellResponse(sellData);
-                  console.log("grokResponseSell ==>>", grokResponse);
-                  // Check stop status before continuing
-                  // if (!isAutoTrading) break;
-
-                  if (grokResponse?.recommendation?.action === "SELL") {
-                    const decimals = 6; // Replace with actual token decimals
-                    // const amountToSell = Math.floor(Number(token.balance) * (10 ** decimals));
-                    const amountToSell = Math.max(1, Math.floor(Number(token.balance) * 0.999));
-                    const failedFromSell = await sellWithRetry(
-                      fromAddress,
-                      grokResponse.recommendation.address,
-                      tokenOut, // Assuming tokenOut is defined
-                      amountToSell,
-                      SLIPPAGE, // Initial slippage
-                      chatId
-                    );
-                    // Add any newly failed tokens to the blacklist
-                    // failedFromSell.forEach(token => failedTokens.add(token));
-                    bot.sendMessage(chatId, `💰 Sold ${grokResponse.recommendation.symbol}`);
-                  }
-                }
-              })    
-             
+              }
             } catch (error) {
               console.error(`Error processing sell for ${token.mint}:`, error);
               if (error.message.includes("No swap route available")) {
@@ -828,70 +1070,22 @@ async function autoSellLoop() {
           }
         }
       } finally {
-        clearInterval(checkStopInterval); // Always clear the interval
+        clearInterval(checkStopInterval);
       }
 
-      // Check if stop is requested before sleeping
-      if (!isAutoTrading) {
-        await sleep(1000); // Short sleep to allow for stop processing
-      } else {
-        await sleep(30000); // Normal interval between operations
-      }
+      if (!isAutoTrading) await sleep(1000);
+      else await sleep(30000);
     } catch (error) {
       console.error('Sell loop error:', error);
-      if (isAutoTrading) {
-        bot.sendMessage(chatId, '⚠️ Sell loop paused due to error');
-      }
-      await sleep(5000); // Shorter wait on error when stopping
+      if (isAutoTrading) bot.sendMessage(chatId, '⚠️ Sell loop paused due to error');
+      await sleep(5000);
     }
   }
-  
+
   console.log('Sell loop has stopped');
   bot.sendMessage(chatId, '✅ Sell loop has stopped completely');
 }
 
-async function sellWithRetry(fromAddress, tokenAddress, tokenOut, amount, initialSlippage = 100, chatId, maxRetries = 3) {
-  let slippage = initialSlippage;
-  let sellAmount = amount;
-  const failedTokens = new Set();
-
-
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      // console.log("failedTokens.has(tokenAddress)",failedTokens.has(tokenAddress))
-      // if(failedTokens.has(tokenAddress)){
-      await sellToken(fromAddress, tokenAddress, tokenOut, sellAmount, slippage, 0, chatId);
-      bot.sendMessage(chatId, `✅ Sold ${sellAmount} of ${tokenAddress} successfully!`);
-      return;
-      // }
-    } catch (error) {
-      console.error(`Sell attempt ${attempt} failed for ${tokenAddress}:`, error.message);
-
-      if (error.message === "No swap route available") {
-        if (attempt === 1 && sellAmount > 0.01) { // Avoid infinite reduction
-          sellAmount = sellAmount / 2;
-          console.log(`Reducing amount to ${sellAmount} for retry...`);
-          continue;
-        } else {
-          failedTokens.add(tokenAddress);
-          bot.sendMessage(chatId, `❌ No swap route for ${tokenAddress}. Blacklisting token.`);
-          // throw new Error(`Sell failed: No swap route available for ${tokenAddress}`);
-        }
-      }
-
-      if (attempt === maxRetries) {
-        bot.sendMessage(chatId, `❌ Failed to sell ${tokenAddress} after ${maxRetries} attempts. Burning token...`);
-        await burnToken(fromAddress, tokenAddress, amount, chatId);
-        return;
-      }
-
-      slippage = Math.min(initialSlippage + (attempt * 200), 1000);
-      console.log(`Retrying sell with slippage ${slippage} and amount ${sellAmount} (attempt ${attempt + 1}/${maxRetries})...`);
-      await sleep(5000 * attempt);
-    }
-  }
-  return failedTokens;
-}
 
 async function burnToken(fromAddress, tokenAddress, amount, chatId) {
   try {
