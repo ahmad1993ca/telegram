@@ -2,6 +2,12 @@ require('dotenv').config();
 const { Connection, Keypair, VersionedTransaction } = require('@solana/web3.js');
 const {  PublicKey } = require("@solana/web3.js");
 
+const {  Transaction, sendAndConfirmTransaction } = require('@solana/web3.js');
+const { createBurnInstruction } = require('@solana/spl-token');
+
+
+const { TOKEN_PROGRAM_ID,getAssociatedTokenAddress } = require('@solana/spl-token');
+
 const fetch = require('node-fetch');
 const TelegramBot = require('node-telegram-bot-api');
 const bs58 = require('bs58');
@@ -104,6 +110,98 @@ const client = new OpenAI({
 });
 // - ✅ **5m & 1h price change must be positive** (>+2% preferred).
 
+// async function getGrokResponse(tokenData, userBalance) {
+//   try {
+//     const completion = await client.chat.completions.create({
+//       model: "grok-2-latest",
+//       messages: [
+//         {
+//           "role": "system",
+//           "content": "You are Grok 2, a crypto trading analyst built by xAI, optimized for short-term trading insights with real-time data analysis."
+//         },
+//         {
+//           "role": "user",
+//           "content": `
+//             **Trading Strategy**:
+//             - Analyze trending tokens from DEXscreener and filter based on liquidity, momentum, safety, and taxes.
+//             - Suggest an investment percentage (between 20-50% of available balance).
+//             - Suggest a sell price based on a reasonable profit margin (e.g., 10-30%).
+        
+//             **User Balance**: ${userBalance} SOL
+//             **Token Data**: ${JSON.stringify(tokenData, null, 2)}
+        
+//             **Evaluation Rules**:
+//             1️⃣ **Liquidity & Market Safety**:
+//                 - ✅ Must have **$10k+ USD liquidity** and **h1 volume > $10k**.
+//                 - ❌ Reject if **liquidity < $10k** or **volume too low**.
+        
+//             2️⃣ **Momentum Analysis**:
+//                 - ❌ Reject if **price drops > -20% in any timeframe**.
+        
+//             3️⃣ **Security & Tax Detection**:
+//                 - ✅ Contract must be **at least 6 hours old** (check \`pairCreatedAt\` timestamp).
+//                 - ❌ Reject if rug pull signs (e.g., sudden liquidity drop) or honeypot detected.
+        
+//             **Output JSON**:
+//             {
+//               "recommendation": {
+//                 "token": "name",
+//                 "symbol": "symbol",
+//                 "address": "tokenAddress",
+//                 "action": "BUY" | "PASS",
+//                 "investPercentage": 20-50,  // % of balance to invest (dynamic)
+//                 "sellPrice": "target price (e.g., 10-30% above current priceUsd)",
+//                 "priceUsd": "current price in USD"
+//               },
+//               "reasoning": "Short explanation (include tax concerns if applicable)...",
+//               "confidence": "0-1 score (e.g., 0.9 for strong BUY, 0.4 for PASS)"
+//             }
+        
+//             **Important**:
+//             - Return *only* a valid JSON object, with no additional text outside the JSON.
+//             - If tax information is missing, check volume, liquidity, and market momentum.
+//             - Use the current timestamp Today to calculate contract age from \`pairCreatedAt\`.
+//           `
+//         }        
+        
+//       ],
+//       max_tokens: 300,
+//       temperature: 0.6
+//     });
+
+//     // const rawContent = completion.choices[0].message.content.trim();
+//     // console.log("raw response ===>>>", rawContent); // Debug raw output
+
+//     // const response = await JSON.parse(rawContent);
+//     // console.log("buy response send ====>>>>>>", response);
+
+//     const rawContent = completion.choices[0].message.content.trim();
+//     console.log("raw response ===>>>", rawContent); // Debug raw output
+
+//     // Extract JSON from ```json ... ``` block
+//     let jsonContent = rawContent;
+//     const jsonMatch = rawContent.match(/```json\s*([\s\S]*?)\s*```/);
+//     if (jsonMatch && jsonMatch[1]) {
+//       jsonContent = jsonMatch[1].trim(); // Extract the JSON string inside the block
+//     } else {
+//       throw new Error("No valid JSON block found in response");
+//     }
+
+//     const response = JSON.parse(jsonContent); // Parse the extracted JSON
+//     console.log("buy response send ====>>>>>>", response);
+
+//     // Convert percentage to actual SOL investment
+//     if (response.recommendation.action === "BUY") {
+//       response.recommendation.investAmount = (userBalance * response.recommendation.investPercentage) / 100;
+//     }
+
+//     return response;
+//   } catch (error) {
+//     console.error("❌ Error fetching response:", error);
+//     return null;
+//   }
+// }
+
 async function getGrokResponse(tokenData, userBalance) {
   try {
     const completion = await client.chat.completions.create({
@@ -111,30 +209,38 @@ async function getGrokResponse(tokenData, userBalance) {
       messages: [
         {
           "role": "system",
-          "content": "You are Grok 2, a crypto trading analyst built by xAI, optimized for short-term trading insights with real-time data analysis."
+          "content": "You are Grok 2, a crypto trading analyst built by xAI, optimized for short-term trading insights with real-time and historical data analysis for maximizing profit."
         },
         {
           "role": "user",
           "content": `
             **Trading Strategy**:
-            - Analyze trending tokens from DEXscreener and filter based on liquidity, momentum, safety, and taxes.
-            - Suggest an investment percentage (between 20-50% of available balance).
-            - Suggest a sell price based on a reasonable profit margin (e.g., 10-30%).
+            - Analyze trending tokens from DEXscreener and filter based on liquidity, momentum, safety, taxes, and historical performance.
+            - Suggest an investment percentage (between 20-50% of available balance) based on risk-reward potential.
+            - Suggest a sell price targeting a dynamic profit margin (15-50%) based on momentum and historical price action.
         
             **User Balance**: ${userBalance} SOL
             **Token Data**: ${JSON.stringify(tokenData, null, 2)}
         
             **Evaluation Rules**:
             1️⃣ **Liquidity & Market Safety**:
-                - ✅ Must have **$10k+ USD liquidity** and **h1 volume > $10k**.
-                - ❌ Reject if **liquidity < $10k** or **volume too low**.
+                - ✅ Must have **$15k+ USD liquidity** and **h1 volume > $20k**.
+                - ❌ Reject if **liquidity < $15k** or **volume too low**.
         
-            2️⃣ **Momentum Analysis**:
-                - ❌ Reject if **price drops > -20% in any timeframe**.
+            2️⃣ **Momentum & Historical Analysis**:
+                - ✅ Favor tokens with **h6 price increase > 10%** or **h24 price increase > 20%**.
+                - ❌ Reject if **price drops > -15% in any timeframe** or no upward momentum in last 24h.
+                - Analyze historical data (e.g., h6, h12, h24 trends) to confirm consistent growth or breakout potential.
         
             3️⃣ **Security & Tax Detection**:
                 - ✅ Contract must be **at least 6 hours old** (check \`pairCreatedAt\` timestamp).
-                - ❌ Reject if rug pull signs (e.g., sudden liquidity drop) or honeypot detected.
+                - ❌ Reject if rug pull signs (e.g., sudden liquidity drop > 50% in h24), honeypot detected, or **tax > 10%** (if tax data available).
+        
+            4️⃣ **Profit Optimization**:
+                - Set sell price based on historical volatility and momentum:
+                  - Low volatility (stable growth): Target **15-25% profit**.
+                  - High volatility (strong momentum): Target **30-50% profit**.
+                - Adjust investment percentage (20-50%) based on confidence and historical reliability.
         
             **Output JSON**:
             {
@@ -144,30 +250,23 @@ async function getGrokResponse(tokenData, userBalance) {
                 "address": "tokenAddress",
                 "action": "BUY" | "PASS",
                 "investPercentage": 20-50,  // % of balance to invest (dynamic)
-                "sellPrice": "target price (e.g., 10-30% above current priceUsd)",
+                "sellPrice": "target price (e.g., 15-50% above current priceUsd)",
                 "priceUsd": "current price in USD"
               },
-              "reasoning": "Short explanation (include tax concerns if applicable)...",
-              "confidence": "0-1 score (e.g., 0.9 for strong BUY, 0.4 for PASS)"
+              "reasoning": "Short explanation (include historical trends, tax concerns, and profit potential)...",
+              "confidence": "0-1 score (e.g., 0.95 for strong BUY, 0.5 for PASS)"
             }
         
             **Important**:
             - Return *only* a valid JSON object, with no additional text outside the JSON.
-            - If tax information is missing, check volume, liquidity, and market momentum.
-            - Use the current timestamp Today to calculate contract age from \`pairCreatedAt\`.
+            - If tax or historical data is missing, estimate based on volume, liquidity, and momentum.
+            - Use the current timestamp (March 19, 2025) to calculate contract age from \`pairCreatedAt\`.
           `
-        }        
-        
+        }
       ],
       max_tokens: 300,
       temperature: 0.6
     });
-
-    // const rawContent = completion.choices[0].message.content.trim();
-    // console.log("raw response ===>>>", rawContent); // Debug raw output
-
-    // const response = await JSON.parse(rawContent);
-    // console.log("buy response send ====>>>>>>", response);
 
     const rawContent = completion.choices[0].message.content.trim();
     console.log("raw response ===>>>", rawContent); // Debug raw output
@@ -330,8 +429,104 @@ const amounts = 24.76569 * 1e9; // Convert to lamports (adjust for token decimal
 const slippage = 2; // 1% slippage
 
 
+
+// async function getGrokSellResponse(tokenData) {
+//   // console.log("data is coming ===>>>", tokenData);
+//   try {
+//     // Resolve the Promise if tokenData is an array containing a Promise
+//     let resolvedData;
+//     if (Array.isArray(tokenData) && tokenData[0] instanceof Promise) {
+//       resolvedData = await tokenData[0]; // Await the first Promise in the array
+//     } else {
+//       resolvedData = tokenData; // Use as-is if not a Promise
+//     }
+
+//     const completion = await client.chat.completions.create({
+//       model: "grok-2-latest",
+//       messages: [
+//         {
+//           role: "system",
+//           content: "You are Grok 3, a crypto trading analyst built by xAI, optimized for short-term trading insights with real-time data analysis, focusing on 2-10% profit after fees while minimizing premature exits."
+//         },
+//         {
+//           role: "user",
+//           content: `
+//             As Grok 3, a crypto trading analyst built by xAI, you’re optimized for short-term trading insights with real-time data analysis. Today. Analyze the following token data from DEXscreener, including the current price (\`priceUsd\`) and my buy price (\`buy_price\`), to decide whether to sell for profit, sell on loss, or hold:
+            
+//             ${JSON.stringify(resolvedData, null, 2)}
+            
+//             Evaluate the token based on:
+//             1. **Profit/Loss Calculation**: 
+//                - Compare \`priceUsd\` (current price) with \`buy_price\`.
+//                - Target a minimum 2% net profit after fees (e.g., 0.5% fee deducted); sell if profit ≥ 2%.
+//                - Sell if loss ≥ -3% (i.e., \`priceUsd\` ≤ 97% of \`buy_price\`).
+//             2. **Momentum**: 
+//                - Use \`priceChange\` (m5: 5-min, h1: 1-hour); only consider momentum if profit < 2% and loss > -3%.
+//             3. **Volume**: 
+//                - Require \`volume.m5\` > $5000 and \`volume.h1\` > $5k; only consider volume if profit < 2% and loss > -3%.
+//             4. **Liquidity**: 
+//                - Filter out tokens with \`liquidity.usd\` < $5000; only consider liquidity if profit < 2% and loss > -3%.
+            
+//             Rules:
+//             - **Sell for Profit**: Sell if profit ≥ 2% after fees, regardless of momentum, volume, or liquidity.
+//             - **Sell on Loss**: Sell if loss ≥ -3% (i.e., \`priceUsd\` ≤ 97% of \`buy_price\`), regardless of momentum, volume, or liquidity.
+//             - **Hold**: Default if profit < 2% and loss > -3%.
+            
+//             Output in JSON:
+//             {
+//               "recommendation": {
+//                 "token": "name",
+//                 "symbol": "symbol",
+//                 "address": "address",
+//                 "action": "SELL" | "HOLD",
+//                 "profit_loss_percent": "calculated profit/loss % (e.g., +3.5% or -3.2%)"
+//               },
+//               "reasoning": "2-3 sentences on profit/loss, momentum, and volume/liquidity trends (only include momentum/volume/liquidity if HOLD)",
+//               "confidence": "0-1 score (e.g., 0.8 for strong SELL, 0.7 for HOLD)"
+//             }
+            
+//             Return the recommendation for the token; default to "HOLD" unless sell signals (profit ≥ 2% or loss ≥ -3%) are clear.
+//           `
+//         }
+//       ],
+//       max_tokens: 300,
+//       temperature: 0.5
+//     });
+
+//     console.log("completion======>>>", completion.choices[0]);
+
+//     let rawContent = completion.choices[0].message.content.trim();
+
+//     // Extract JSON from the response (if wrapped in a code block)
+//     let jsonMatch = rawContent.match(/```json\s*([\s\S]*?)\s*```/);
+//     if (jsonMatch) {
+//       rawContent = jsonMatch[1].trim();
+//     }
+
+//     // Try to parse the JSON
+//     try {
+//       const response = JSON.parse(rawContent);
+//       return response;
+//     } catch (jsonError) {
+//       console.warn("⚠ JSON parse failed:", jsonError.message);
+
+//       // Fallback: Try to extract JSON from the response using a regex
+//       const jsonRegex = /{[\s\S]*}/;
+//       let possibleJsonMatch = rawContent.match(jsonRegex);
+//       if (possibleJsonMatch) {
+//         return JSON.parse(possibleJsonMatch[0]);
+//       }
+
+//       // If no valid JSON is found, throw an error
+//       throw new Error("❌ No valid JSON found after multiple attempts.");
+//     }
+//   } catch (error) {
+//     console.error("❌ Error fetching response:", error);
+//     return null;
+//   }
+// }
+
 async function getGrokSellResponse(tokenData) {
-  console.log("data is coming ===>>>", tokenData);
   try {
     // Resolve the Promise if tokenData is an array containing a Promise
     let resolvedData;
@@ -341,21 +536,17 @@ async function getGrokSellResponse(tokenData) {
       resolvedData = tokenData; // Use as-is if not a Promise
     }
 
-    // console.log("resolved data ===>>>", resolvedData);
-
-    // - **Hold**: Default if profit < 2%, loss > -3%, and momentum (m5 > +2% or h1 > +5%) or volume suggests upside.
-
     const completion = await client.chat.completions.create({
       model: "grok-2-latest",
       messages: [
         {
           role: "system",
-          content: "You are Grok 3, a crypto trading analyst built by xAI, optimized for short-term trading insights with real-time data analysis, focusing on 2-10% profit after fees while minimizing premature exits."
+          content: "You are Grok 3, a crypto trading analyst built by xAI, optimized for short-term trading insights with real-time and historical data analysis, focusing on 2-10% profit after fees and proactive loss minimization."
         },
         {
           role: "user",
           content: `
-            As Grok 3, a crypto trading analyst built by xAI, you’re optimized for short-term trading insights with real-time data analysis. Today. Analyze the following token data from DEXscreener, including the current price (\`priceUsd\`) and my buy price (\`buy_price\`), to decide whether to sell for profit, sell on loss, or hold:
+            As Grok 3, a crypto trading analyst built by xAI, you’re optimized for short-term trading insights using real-time and historical data from DEXscreener. Today is March 19, 2025. Analyze the following token data, including the current price (\`priceUsd\`) and my buy price (\`buy_price\`), to decide whether to sell for profit, sell on loss, or hold:
             
             ${JSON.stringify(resolvedData, null, 2)}
             
@@ -363,18 +554,22 @@ async function getGrokSellResponse(tokenData) {
             1. **Profit/Loss Calculation**: 
                - Compare \`priceUsd\` (current price) with \`buy_price\`.
                - Target a minimum 2% net profit after fees (e.g., 0.5% fee deducted); sell if profit ≥ 2%.
-               - Sell if loss ≥ -3% (i.e., \`priceUsd\` ≤ 97% of \`buy_price\`).
-            2. **Momentum**: 
-               - Use \`priceChange\` (m5: 5-min, h1: 1-hour); only consider momentum if profit < 2% and loss > -3%.
+               - Sell if loss ≥ -2% (i.e., \`priceUsd\` ≤ 98% of \`buy_price\`) AND momentum is weak (see below).
+            2. **Momentum & Historical Trends**: 
+               - Check \`priceChange\` (m5: 5-min, h1: 1-hour, h6: 6-hour, h24: 24-hour).
+               - Sell if profit < 2% and momentum weakens (e.g., h1 < 0% AND h6 < 5%) to avoid holding declining tokens.
+               - Hold if h6 > 10% or h24 > 15% and profit < 2%, indicating potential for further growth.
             3. **Volume**: 
-               - Require \`volume.m5\` > $5000 and \`volume.h1\` > $5k; only consider volume if profit < 2% and loss > -3%.
+               - Require \`volume.m5\` > $5000 and \`volume.h1\` > $10k; sell if volume drops below these thresholds and momentum is weak.
             4. **Liquidity**: 
-               - Filter out tokens with \`liquidity.usd\` < $5000; only consider liquidity if profit < 2% and loss > -3%.
+               - Filter out tokens with \`liquidity.usd\` < $10k; sell if liquidity falls below this AND momentum is weak.
             
             Rules:
-            - **Sell for Profit**: Sell if profit ≥ 2% after fees, regardless of momentum, volume, or liquidity.
-            - **Sell on Loss**: Sell if loss ≥ -3% (i.e., \`priceUsd\` ≤ 97% of \`buy_price\`), regardless of momentum, volume, or liquidity.
-            - **Hold**: Default if profit < 2% and loss > -3%.
+            - **Sell for Profit**: Sell if profit ≥ 2% after fees, regardless of other factors.
+            - **Sell on Loss**: 
+               - Sell if loss ≥ -2% AND momentum is weak (e.g., h1 < 0% AND h6 < 5%) OR volume/liquidity is insufficient.
+               - Escalate to sell if loss ≥ -5%, regardless of momentum, to minimize deeper losses (e.g., avoid -30% or -20%).
+            - **Hold**: Default if profit < 2%, loss > -5%, and momentum remains strong (e.g., h6 > 10% or h24 > 15%).
             
             Output in JSON:
             {
@@ -383,38 +578,45 @@ async function getGrokSellResponse(tokenData) {
                 "symbol": "symbol",
                 "address": "address",
                 "action": "SELL" | "HOLD",
-                "profit_loss_percent": "calculated profit/loss % (e.g., +3.5% or -3.2%)"
+                "profit_loss_percent": "calculated profit/loss % (e.g., +3.5% or -4.2%)"
               },
-              "reasoning": "2-3 sentences on profit/loss, momentum, and volume/liquidity trends (only include momentum/volume/liquidity if HOLD)",
-              "confidence": "0-1 score (e.g., 0.8 for strong SELL, 0.7 for HOLD)"
+              "reasoning": "2-3 sentences on profit/loss, historical momentum, and volume/liquidity trends",
+              "confidence": "0-1 score (e.g., 0.9 for strong SELL, 0.7 for HOLD)"
             }
             
-            Return the recommendation for the token; default to "HOLD" unless sell signals (profit ≥ 2% or loss ≥ -3%) are clear.
+            Return the recommendation for the token; prioritize faster exits if momentum weakens to avoid large losses.
           `
         }
       ],
       max_tokens: 300,
       temperature: 0.5
     });
+
     console.log("completion======>>>", completion.choices[0]);
 
     let rawContent = completion.choices[0].message.content.trim();
-    let jsonMatch = rawContent.match(/```json\s*([\s\S]*?)\s*```/);
 
+    // Extract JSON from the response (if wrapped in a code block)
+    let jsonMatch = rawContent.match(/```json\s*([\s\S]*?)\s*```/);
     if (jsonMatch) {
       rawContent = jsonMatch[1].trim();
     }
 
+    // Try to parse the JSON
     try {
       const response = JSON.parse(rawContent);
       return response;
     } catch (jsonError) {
       console.warn("⚠ JSON parse failed:", jsonError.message);
+
+      // Fallback: Try to extract JSON from the response using a regex
       const jsonRegex = /{[\s\S]*}/;
       let possibleJsonMatch = rawContent.match(jsonRegex);
       if (possibleJsonMatch) {
         return JSON.parse(possibleJsonMatch[0]);
       }
+
+      // If no valid JSON is found, throw an error
       throw new Error("❌ No valid JSON found after multiple attempts.");
     }
   } catch (error) {
@@ -422,7 +624,6 @@ async function getGrokSellResponse(tokenData) {
     return null;
   }
 }
-
 
 async function checkBalance() {
   const balance = await connection.getBalance(keypair.publicKey);
@@ -518,7 +719,7 @@ return signature;
 async function sellToken(fromAddress, tokenIn, tokenOut, amount, slippage, buyPrice, chatId) {
   await sleep(3000)
   console.log(`Attempting to sell ${amount} of ${tokenIn} for ${tokenOut} with slippage ${slippage}`);
-  return await swapTokens(amount, tokenIn, true, slippage);
+  return await swapTokens(amount, '8okk9j6vJdYg3Ev5eMUwDYzCNMaVGAUbTTJHWnN1pump', true, slippage);
 }
 
 // Add a flag to track if auto-trading is running
@@ -544,10 +745,10 @@ bot.onText(/\/start/, async (msg) => {
     // Start parallel buy and sell loops
     autoBuyLoop();
      // Add delay between operations (e.g., 1 second)
-     await new Promise(resolve => setTimeout(resolve, 1000));
+    //  await new Promise(resolve => setTimeout(resolve, 1000));s
     autoSellLoop();
-     // Add delay before next cycle
-     await new Promise(resolve => setTimeout(resolve, 1000));
+     // Add delay before next cycles
+    //  await new Promise(resolve => setTimeout(resolve, 1000));
   } catch (error) {
     console.error('Error starting auto-trade:', error);
     isAutoTrading = false;
@@ -648,251 +849,6 @@ async function autoBuyLoop() {
   bot.sendMessage(chatId, '✅ Buy loop has stopped completely');
 }
 
-// Sell loop with improved stop handling
-// async function autoSellLoop() {
-//   const failedTokens = new Set(); // Persistent blacklist across loop iterations
-//   // Track when stop was requested for timeout enforcement
-//   let stopRequestTime = null;
-  
-//   while (isAutoTrading || (stopRequestTime && Date.now() - stopRequestTime < 20000)) {
-//     try {
-//       // Check if stop was requested and set the time if not already set
-//       if (!isAutoTrading && !stopRequestTime) {
-//         stopRequestTime = Date.now();
-//         console.log('Stop requested in sellLoop, will exit within 20 seconds');
-//         bot.sendMessage(chatId, '🛑 Sell loop will stop within 20 seconds...');
-//       }
-      
-//       // Force stop after 20 seconds from stop request
-//       if (stopRequestTime && Date.now() - stopRequestTime >= 20000) {
-//         console.log('Forcing sell loop to stop after timeout');
-//         break;
-//       }
-//       // Fetch purchased tokens
-//         const tokens = await getPurchasedTokens(fromAddress);
-//         console.log("purchased token ===>>>", tokens);
-//         let allTokens;
-//         // Fetch all tokens from the database
-//         try {
-//           const sqlquery = "SELECT * FROM transactions";
-//           const allTokens = await new Promise((resolve, reject) => {
-//               db.query(sqlquery, (error, results) => {
-//                   if (error) {
-//                       reject(error);
-//                       return;
-//                   }
-//                   resolve(results);
-//               });
-//           });
-  
-//           // console.log("allTokens", allTokens);
-//                   // Extract the mint addresses of purchased tokens
-//         const purchasedTokenMints = tokens.map(token => token.mint);
-
-//         // Filter out tokens that are not in the purchased tokens list
-//         const tokensToDelete = allTokens.filter(token => !purchasedTokenMints.includes(token.address));
-//           // console.log("tokensToDelete",tokensToDelete)
-//           // Continue with your token processing...
-//           // Delete tokens that are not in the purchased tokens list
-//         if (tokensToDelete.length > 0) {
-//             for (const token of tokensToDelete) {
-//                 await db.query('DELETE FROM transactions WHERE hash = ?', [token.hash]); // Adjust the query as per your database schema
-//                 console.log(`Deleted token with mint: ${token.address}`);
-//             }
-//         } else {
-//             console.log('No tokens to delete.');
-//         }
-  
-//       } catch (error) {
-//           console.error("Database error:", error);
-//           // Handle the error appropriately
-//       }
-
-        
-//       if (!tokens.length || !isAutoTrading) {
-//         if (!isAutoTrading) {
-//           await sleep(1000); // Short sleep when stopping
-//           continue;
-//         }
-        
-//         bot.sendMessage(chatId, 'ℹ️ No tokens to sell');
-//         await sleep(30000);
-//         continue;
-//       }
-
-//       // Filter out blacklisted tokens
-//       const validTokens = tokens.filter(token => !failedTokens.has(token.mint));
-
-//       // Setup a timeout to check isAutoTrading during long operations
-//       const checkStopInterval = setInterval(() => {
-//         if (!isAutoTrading && !stopRequestTime) {
-//           stopRequestTime = Date.now();
-//           console.log('Stop detected during token selling operations');
-//           bot.sendMessage(chatId, '🛑 Stopping sell operations...');
-//         }
-//       }, 2000);
-      
-//       try {
-//         // console.log("111111111111111111111111",)
-//         // Process tokens only if we're still auto-trading
-//         if (isAutoTrading && validTokens.length > 0) {
-//           // Process tokens in series instead of parallel for better control
-//           for (const token of validTokens) {
-//             // Check if stop was requested before each token
-//             if (!isAutoTrading) break;
-            
-//             try {
-//         // console.log("222222222222222222222")
-
-//               const response = await fetch(`https://api.dexscreener.com/tokens/v1/solana/${token.mint}`);
-//               const tokenData = await response.json();
-//               // console.log("tokenData =======>>",tokenData)
-//                db.query(`SELECT * FROM transactions WHERE address = '${token.mint}'`, async function (err, result) {
-//                 // console.log('result', err);
-//                 if (err) {
-//                   // return result.json(err);
-//                 }
-//                 else {
-//                   await result;
-//                     const sumBuyPrice = result.reduce((sum, transaction) => {
-//                       return sum + parseFloat(transaction.buy_price);
-//                   }, 0);
-
-//                   //  result;
-//                   const sellData = await tokenData.map(async (t) => (
-
-//                     {
-//                       name: t.baseToken.name || "Unknown",
-//                       symbol: t.baseToken.symbol || "UNKNOWN",
-//                       address: t.baseToken.address,
-//                       priceUsd: t.priceUsd || 0, // Current price in USD
-//                       priceNative: t.priceNative || 0, // Price in SOL
-//                       priceChange: {
-//                         m5: t.priceChange?.m5 || 0, // 5-min change
-//                         h1: t.priceChange?.h1 || 0, // 1-hour change
-//                         h6: t.priceChange?.h6 || 0, // 6-hour change
-//                         h24: t.priceChange?.h24 || 0 // 24-hour change
-//                       },
-//                       volume: {
-//                         m5: t.volume?.m5 || 0,
-//                         h1: t.volume?.h1 || 0,
-//                         h6: t.volume?.h6 || 0,
-//                         h24: t.volume?.h24 || 0
-//                       },
-//                       liquidity: {
-//                         usd: t.liquidity?.usd || 0,
-//                         base: t.liquidity?.base || 0, // Base token amount in pool
-//                         quote: t.liquidity?.quote || 0 // Quote token (e.g., SOL) amount
-//                       },
-//                       marketCap: t.marketCap || 0, // Market cap for valuation
-
-
-//                       fdv: t.fdv || 0, // Fully diluted valuation
-//                       holding_amount: token.balance || 0, // Your holding amount
-//                       buy_price: sumBuyPrice ? (sumBuyPrice / result.length) : (t.priceUsd * 1.01) || t.priceUsd * 0.01, // Your buy price
-//                     }));
-
-//                   // Check stop status before continuing
-//                   // if (!isAutoTrading) break;
-//                   console.log("sellData ==>>", sellData);
-//                   const grokResponse = await getGrokSellResponse(sellData);
-//                   console.log("grokResponseSell ==>>", grokResponse);
-//                   // Check stop status before continuing
-//                   // if (!isAutoTrading) break;
-
-//                   if (grokResponse?.recommendation?.action === "SELL") {
-//                     const decimals = 6; // Replace with actual token decimals
-//                     // const amountToSell = Math.floor(Number(token.balance) * (10 ** decimals));
-//                     const amountToSell = Math.max(1, Math.floor(Number(token.balance) * 0.999));
-//                     const failedFromSell = await sellWithRetry(
-//                       fromAddress,
-//                       grokResponse.recommendation.address,
-//                       tokenOut, // Assuming tokenOut is defined
-//                       amountToSell,
-//                       SLIPPAGE, // Initial slippage
-//                       chatId
-//                     );
-//                     // Add any newly failed tokens to the blacklist
-//                     // failedFromSell.forEach(token => failedTokens.add(token));
-//                     bot.sendMessage(chatId, `💰 Sold ${grokResponse.recommendation.symbol}`);
-//                   }
-//                 }
-//               })    
-             
-//             } catch (error) {
-//               console.error(`Error processing sell for ${token.mint}:`, error);
-//               if (error.message.includes("No swap route available")) {
-//                 failedTokens.add(token.mint);
-//               }
-//             }
-//           }
-//         }
-//       } finally {
-//         clearInterval(checkStopInterval); // Always clear the interval
-//       }
-
-//       // Check if stop is requested before sleeping
-//       if (!isAutoTrading) {
-//         await sleep(1000); // Short sleep to allow for stop processing
-//       } else {
-//         await sleep(30000); // Normal interval between operations
-//       }
-//     } catch (error) {
-//       console.error('Sell loop error:', error);
-//       if (isAutoTrading) {
-//         bot.sendMessage(chatId, '⚠️ Sell loop paused due to error');
-//       }
-//       await sleep(5000); // Shorter wait on error when stopping
-//     }
-//   }
-  
-//   console.log('Sell loop has stopped');
-//   bot.sendMessage(chatId, '✅ Sell loop has stopped completely');
-// }
-
-// async function sellWithRetry(fromAddress, tokenAddress, tokenOut, amount, initialSlippage = 100, chatId, maxRetries = 3) {
-//   let slippage = initialSlippage;
-//   let sellAmount = amount;
-//   const failedTokens = new Set();
-
-
-//   for (let attempt = 1; attempt <= maxRetries; attempt++) {
-//     try {
-//       // console.log("failedTokens.has(tokenAddress)",failedTokens.has(tokenAddress))
-//       // if(failedTokens.has(tokenAddress)){
-//       await sellToken(fromAddress, tokenAddress, tokenOut, sellAmount, slippage, 0, chatId);
-//       bot.sendMessage(chatId, `✅ Sold ${sellAmount} of ${tokenAddress} successfully!`);
-//       return;
-//       // }
-//     } catch (error) {
-//       console.error(`Sell attempt ${attempt} failed for ${tokenAddress}:`, error.message);
-
-//       if (error.message === "No swap route available") {
-//         if (attempt === 1 && sellAmount > 0.01) { // Avoid infinite reduction
-//           sellAmount = sellAmount / 2;
-//           console.log(`Reducing amount to ${sellAmount} for retry...`);
-//           continue;
-//         } else {
-//           failedTokens.add(tokenAddress);
-//           bot.sendMessage(chatId, `❌ No swap route for ${tokenAddress}. Blacklisting token.`);
-//           // throw new Error(`Sell failed: No swap route available for ${tokenAddress}`);
-//         }
-//       }
-
-//       if (attempt === maxRetries) {
-//         bot.sendMessage(chatId, `❌ Failed to sell ${tokenAddress} after ${maxRetries} attempts. Burning token...`);
-//         await burnToken(fromAddress, tokenAddress, amount, chatId);
-//         return;
-//       }
-
-//       slippage = Math.min(initialSlippage + (attempt * 200), 1000);
-//       console.log(`Retrying sell with slippage ${slippage} and amount ${sellAmount} (attempt ${attempt + 1}/${maxRetries})...`);
-//       await sleep(5000 * attempt);
-//     }
-//   }
-//   return failedTokens;
-// }
-
 
 async function sellWithRetry(fromAddress, tokenAddress, tokenOut, amount, initialSlippage = 100, chatId, maxRetries = 3) {
   let slippage = initialSlippage;
@@ -900,32 +856,39 @@ async function sellWithRetry(fromAddress, tokenAddress, tokenOut, amount, initia
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      bot.sendMessage(chatId, `🔄 Attempting to sell ${amount} of ${tokenAddress} (Attempt ${attempt}/${maxRetries}) with slippage ${slippage/100}%`);
+      bot.sendMessage(chatId, `🔄 Attempting to sell ${amount} of ${tokenAddress} (Attempt ${attempt}/${maxRetries}) with slippage ${slippage / 100}%`);
+      // await burnToken(fromAddress, tokenAddress, amount, chatId);
+  
+      // Attempt to sell the token
       await sellToken(fromAddress, tokenAddress, tokenOut, amount, slippage, 0, chatId);
-      bot.sendMessage(chatId, `✅ Sold ${amount} of ${tokenAddress} successfully in one transaction!`);
+      bot.sendMessage(chatId, `✅ Sold ${amount} of ${tokenAddress} successfully!`);
       return; // Exit on success
     } catch (error) {
       console.error(`Sell attempt ${attempt} failed for ${tokenAddress}:`, error.message);
 
-      if (error.message.includes("No swap route available") || error.message.includes("Slippage")) {
+      if (error.message.includes("No swap route available") || error.message.includes("COULD_NOT_FIND_ANY_ROUTE")) {
         if (attempt === maxRetries) {
+          // If all retries fail, burn the tokens
+          await burnToken(fromAddress, tokenAddress, amount, chatId);
+
           failedTokens.add(tokenAddress);
-          bot.sendMessage(chatId, `❌ Failed to sell ${tokenAddress} after ${maxRetries} attempts. Blacklisting token.`);
-          await burnToken(fromAddress, tokenAddress, amount, chatId); // Burn if all retries fail
+          bot.sendMessage(chatId, `❌ Failed to sell ${tokenAddress} after ${maxRetries} attempts. Burning tokens...`);
           break;
         }
 
-        // Increase slippage for the next attempt (e.g., 1% -> 3% -> 5%)
+        // Increase slippage for the next attempt
         slippage = Math.min(initialSlippage + (attempt * 200), 1000); // Cap at 10%
-        console.log(`Retrying with slippage ${slippage/100}% (attempt ${attempt + 1}/${maxRetries})...`);
-        await sleep(5000 * attempt); // Exponential backoff
+        console.log(`Retrying with slippage ${slippage / 100}% (attempt ${attempt + 1}/${maxRetries})...`);
       } else {
         // Non-recoverable error (e.g., insufficient balance), stop retrying
         bot.sendMessage(chatId, `❌ Sell failed for ${tokenAddress}: ${error.message}`);
         break;
       }
+
+      await sleep(5000 * attempt); // Exponential backoff
     }
   }
+
   return failedTokens;
 }
 
@@ -1042,8 +1005,29 @@ async function autoSellLoop() {
               const grokResponse = await getGrokSellResponse(sellData);
               console.log("Grok Sell Response ==>>", grokResponse);
 
+              // if (grokResponse?.recommendation?.action === "SELL") {
+              //   const fullAmount = Math.floor(Number(token.balance) * 0.999); // Sell 99.9% to avoid dust
+              //   const failedFromSell = await sellWithRetry(
+              //     fromAddress,
+              //     grokResponse.recommendation.address,
+              //     tokenOut,
+              //     fullAmount,
+              //     SLIPPAGE,
+              //     chatId
+              //   );
+
+              //   if (failedFromSell.size === 0) {
+              //     // Update database only after successful sale
+              //     await db.query('DELETE FROM transactions WHERE address = ?', [token.mint]);
+              //     bot.sendMessage(chatId, `💰 Sold full amount of ${grokResponse.recommendation.symbol} (${fullAmount})`);
+              //   } else {
+              //     failedTokens.add(token.mint);
+              //   }
+              // }
+
               if (grokResponse?.recommendation?.action === "SELL") {
-                const fullAmount = Math.floor(Number(token.balance) * 0.999); // Sell 99.9% to avoid dust
+                const fullAmount = Math.floor(Number(token.balance) * 0.999);
+                // console.log(`Calling sellWithRetry for ${token.mint} with amount ${fullAmount}`);
                 const failedFromSell = await sellWithRetry(
                   fromAddress,
                   grokResponse.recommendation.address,
@@ -1052,9 +1036,7 @@ async function autoSellLoop() {
                   SLIPPAGE,
                   chatId
                 );
-
-                if (failedFromSell.size === 0) {
-                  // Update database only after successful sale
+                if (failedFromSell.holding_amount === 0) {
                   await db.query('DELETE FROM transactions WHERE address = ?', [token.mint]);
                   bot.sendMessage(chatId, `💰 Sold full amount of ${grokResponse.recommendation.symbol} (${fullAmount})`);
                 } else {
@@ -1089,17 +1071,46 @@ async function autoSellLoop() {
 
 async function burnToken(fromAddress, tokenAddress, amount, chatId) {
   try {
-    bot.sendMessage(chatId, `🔥 Burning ${amount} of ${tokenAddress} as it could not be sold.`);
+    const connection = new Connection("https://api.mainnet-beta.solana.com", "confirmed");
+    const payer = keypair; // Use your Keypair
+    const tokenMintPublicKey = new PublicKey(tokenAddress);
 
-    const burnAddress = "0x000000000000000000000000000000000000dead";
-    const signature = await transferTokens(fromAddress, tokenAddress, burnAddress, amount);
+    // Get the associated token account
+    const tokenAccountPublicKey = await getAssociatedTokenAddress(
+      tokenMintPublicKey,
+      payer.publicKey
+    );
 
+    // Create burn instruction
+    const burnInstruction = createBurnInstruction(
+      tokenAccountPublicKey, // Token account to burn from
+      tokenMintPublicKey,   // Mint address of the token
+      payer.publicKey,      // Owner of the token account
+      BigInt(amount)        // Amount to burn (raw units)
+    );
+
+    // Create transaction
+    const transaction = new Transaction();
+    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
+    transaction.recentBlockhash = blockhash;
+    transaction.feePayer = payer.publicKey;
+    transaction.add(burnInstruction);
+
+    // Sign and send
+    transaction.sign(payer);
+    const signature = await connection.sendRawTransaction(transaction.serialize(), {
+      skipPreflight: false,
+      maxRetries: 5,
+    });
+
+    await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, "finalized");
     bot.sendMessage(chatId, `🔥 Successfully burned ${amount} of ${tokenAddress}. Tx: https://solscan.io/tx/${signature}`);
   } catch (error) {
-    console.error(`Failed to burn ${tokenAddress}:`, error.message);
-    bot.sendMessage(chatId, `❌ Failed to burn ${tokenAddress}: ${error.message}`);
+    console.error(`❌ Failed to burn ${tokenAddress}:`, error);
+    bot.sendMessage(chatId, `❌ Failed to burn ${amount} of ${tokenAddress}: ${error.message}`);
   }
 }
+
 
 async function transferTokens(fromAddress, tokenAddress, toAddress, amount) {
   const fromPubkey = new PublicKey(fromAddress);
