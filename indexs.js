@@ -27,7 +27,8 @@ const port = 3003;
 app.use(bodyParser.json());
 app.use(cors());
 // const axios = require("axios");
-
+let initialBalance = 0; // Initial SOL balance when bot starts
+let totalProfit = 0;    // Track total profit
 // ✅ Constants & Configuration
 const API_HOST = 'https://gmgn.ai';
 const SOLANA_RPC_URL = 'https://api.mainnet-beta.solana.com';
@@ -205,43 +206,42 @@ const client = new OpenAI({
 
 async function getGrokResponse(tokenData, userBalance) {
   try {
+    console.log("tokenData getGrokResponse",tokenData)
     const completion = await client.chat.completions.create({
       model: "grok-2-latest",
       messages: [
         {
           "role": "system",
-          "content": "You are Grok 2, a crypto trading analyst built by xAI, optimized for short-term trading insights with real-time and historical data analysis for maximizing profit."
+          "content": "You are Grok 2, a crypto trading analyst built by xAI, optimized for short-term trading insights with real-time and historical data analysis for maximizing profit on volatile meme coins."
         },
         {
           "role": "user",
           "content": `
             **Trading Strategy**:
-            - Analyze trending tokens from DEXscreener and filter based on liquidity, momentum, safety, taxes, and historical performance.
-            - Suggest an investment percentage (between 20-50% of available balance) based on risk-reward potential.
-            - Suggest a sell price targeting a dynamic profit margin (15-50%) based on momentum and historical price action.
+            - Analyze trending tokens from DEXscreener for quick-profit meme coin opportunities.
+            - Suggest an investment percentage (20-50% of balance) based on volatility and upside potential.
+            - Suggest a sell price targeting 5-20% profit for fast flips, adjustable based on short-term momentum.
         
             **User Balance**: ${userBalance} SOL
             **Token Data**: ${JSON.stringify(tokenData, null, 2)}
         
             **Evaluation Rules**:
             1️⃣ **Liquidity & Market Safety**:
-                - ✅ Must have **$15k+ USD liquidity** and **h1 volume > $20k**.
-                - ❌ Reject if **liquidity < $15k** or **volume too low**.
+                - ✅ Must have **$5k+ USD liquidity** and **h1 volume > $5k**.
+                - ❌ Reject if **liquidity < $5k** or **volume too low**.
         
             2️⃣ **Momentum & Historical Analysis**:
-           - ✅ Favor tokens with **h6 price increase > 10%**, **h24 price increase > 20%**, or **m5 price increase > 5%**.
-           - ❌ Reject if **price drops > -15% in any timeframe** (m5, h1, h6, h24) or no upward momentum in the last 24h.
-           - Analyze historical data (e.g., m5, h1, h6, h12, h24 trends) to confirm consistent growth or breakout potential.
-
+                - ✅ Favor tokens with **m5 price increase > 10%** or **h1 > 15%**.
+                - ❌ Reject if **price drops > -10% in m5 or h1**.
+                - Focus on short-term breakout potential (m5, h1) over long-term trends.
+        
             3️⃣ **Security & Tax Detection**:
-                - ✅ Contract must be **at least 6 hours old** (check \`pairCreatedAt\` timestamp).
-                - ❌ Reject if rug pull signs (e.g., sudden liquidity drop > 50% in h24), honeypot detected, or **tax > 10%** (if tax data available).
+                - ✅ Contract must be **at least 1 hour old** (check \`pairCreatedAt\`).
+                - ❌ Reject if rug pull signs (e.g., liquidity drop > 50% in h1) or **tax > 10%**.
         
             4️⃣ **Profit Optimization**:
-                - Set sell price based on historical volatility and momentum:
-                  - Low volatility (stable growth): Target **15-25% profit**.
-                  - High volatility (strong momentum): Target **30-50% profit**.
-                - Adjust investment percentage (20-50%) based on confidence and historical reliability.
+                - Target **5-20% profit** based on momentum (e.g., 5% for low volatility, 20% for high).
+                - Adjust investment percentage (20-50%) based on breakout confidence.
         
             **Output JSON**:
             {
@@ -250,25 +250,25 @@ async function getGrokResponse(tokenData, userBalance) {
                 "symbol": "symbol",
                 "address": "tokenAddress",
                 "action": "BUY" | "PASS",
-                "investPercentage": 20-50,  // % of balance to invest (dynamic)
-                "sellPrice": "target price (e.g., 15-50% above current priceUsd)",
+                "investPercentage": 20-50,
+                "sellPrice": "target price (5-20% above current priceUsd)",
                 "priceUsd": "current price in USD"
               },
-              "reasoning": "Short explanation (include historical trends, tax concerns, and profit potential)...",
+              "reasoning": "Short explanation (focus on breakout potential and profit)...",
               "confidence": "0-1 score (e.g., 0.95 for strong BUY, 0.5 for PASS)"
             }
         
             **Important**:
-            - Return *only* a valid JSON object, with no additional text outside the JSON.
-            - If tax or historical data is missing, estimate based on volume, liquidity, and momentum.
-            - Use the current timestamp  ${Date.now()} to calculate contract age from \`pairCreatedAt\`.
+            - Return *only* a valid JSON object.
+            - Estimate tax/volume if data is missing.
+            - Use timestamp ${Date.now()} for contract age from \`pairCreatedAt\`.
           `
         }
       ],
       max_tokens: 300,
       temperature: 0.6
     });
-
+    // ... (rest of the function unchanged)
     const rawContent = completion.choices[0].message.content.trim();
     console.log("raw response ===>>>", rawContent); // Debug raw output
 
@@ -290,6 +290,7 @@ async function getGrokResponse(tokenData, userBalance) {
     }
 
     return response;
+ 
   } catch (error) {
     console.error("❌ Error fetching response:", error);
     return null;
@@ -352,7 +353,10 @@ async function getTrendingTokens(filters) {
 
     const bestTokens = [];
     const balance = await checkBalance();
-    if (balance <= 0.02) {
+    const tradingBalance = Math.min(initialBalance, balance);
+
+    console.log("tradingBalance ====>>>>>",tradingBalance);
+    if (tradingBalance <= 0.02) {
       bot.sendMessage(chatId, '❌ Insufficient balance to trade!');
       return [];
     }
@@ -361,7 +365,7 @@ async function getTrendingTokens(filters) {
       await sleep(index * 1000); // Staggered delay to avoid rate limits
       try {
          const highFee =await checkTokenTransferFee(element.tokenAddress);
-         console.log("highFee =====>>>>>",highFee);
+        //  console.log("highFee =====>>>>>",highFee);
          if (highFee !== 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb') {
      
           // const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${element.tokenAddress}`)
@@ -375,9 +379,10 @@ async function getTrendingTokens(filters) {
           // }
         }
 
-        if (tokenData.length > 0 && balance > 0.020) {
+        if (tokenData.length > 0 && tradingBalance > 0.020) {
           // console.log("bestTokens",bestTokens);
-          const intraday = await getGrokResponse(tokenData, balance);
+          const intraday = await getGrokResponse(tokenData, tradingBalance);
+          console.log("intraday",intraday)
           if (!intraday) {
             bot.sendMessage(chatId, '❌ No trading recommendation available');
             continue;
@@ -395,14 +400,14 @@ async function getTrendingTokens(filters) {
               Confidence: ${intraday.confidence}
               🔄 Trading ${intraday.recommendation.investPercentage}% of balance...
             `);
-            const investAmount = balance - intraday.recommendation.investAmount ;
+            const investAmount = tradingBalance - intraday.recommendation.investAmount;
             // console.log("43535664757 ===========",typeof balance ,typeof intraday.recommendation.investAmount)
             const tradeAmount = intraday.recommendation.investAmount * 1e9; // Convert SOL to lamports
             // console.log("43535664757 ===========>>>>>>>>",investAmount > 0.011)
             // 
             if(investAmount > 0.020){
             // console.log("43535664757 ===========>>>>>>>>000")
-            intraday.balance;
+            intraday.tradingBalance;
             intraday.investAmount
             await swapTokens(Math.round(tradeAmount), intraday.recommendation.address,intraday);
             }else{
@@ -536,22 +541,24 @@ async function getGrokSellResponse(tokenData) {
         {
           role: "user",
           content: `
-            As Grok 3, a crypto trading analyst built by xAI, you’re optimized for short-term trading insights using real-time data from DEXscreener. Today is ${Date.now()}. Analyze the following token data, including the current price (\`priceUsd\`) and my buy price (\`buy_price\`), to recommend whether to sell for profit, sell to cut losses, or hold. Since this is a meme coin with low stability swapped on Jupiter, prioritize quick sells for profits (gross ≥5% to net profit after 0.2% Jupiter fee + $0.01 gas) and cut losses early (≥-0.5%), ignoring momentum due to lack of long-term stability:
+            As Grok 3, a crypto trading analyst built by xAI, you’re optimized for short-term trading insights using real-time data from DEXscreener. Today is ${Date.now()}. Analyze the following token data, including the current price (\`priceUsd\`) and my buy price (\`buy_price\`), to recommend whether to sell for profit, sell to cut losses, or hold. Since this is a meme coin with low stability swapped on Jupiter, prioritize quick sells for profits (gross ≥5% to net ≥4.5% after 0.2% Jupiter fee + $0.01 gas) and cut losses early:
         
             ${JSON.stringify(resolvedData, null, 2)}
         
             Evaluate the token based on:
             1. **Profit/Loss Calculation**:
-               - Compare \`priceUsd\` (current price) with \`buy_price\`.
-               - Target a gross profit of ≥5% to net a profit after fees (assume 0.2% Jupiter fee + $0.01 gas); sell if profit ≥ 5%.
-               - Sell if loss ≥ -0.5% to minimize losses early, regardless of other factors.
+               - Compare \`priceUsd\` with \`buy_price\`.
+               - Target a gross profit of ≥5% to net ≥4.5% after fees; sell if profit ≥ 5%.
+               - Sell if loss ≥ -2% AND momentum is weak; escalate to sell if loss ≥ -5% regardless.
+            2. **Momentum**:
+               - Hold if profit < 5% AND momentum is strong (e.g., m5 > 5% OR h1 > 10%).
+               - Sell if loss ≥ -2% AND momentum weakens (e.g., m5 < 0% AND h1 < 0%).
         
             Rules:
-            - **Sell for Profit**: Sell if gross profit ≥ 5% (nets profit after fees); do not sell for profit below this threshold.
-            - **Sell on Loss**: Sell if loss ≥ -0.5%, regardless of other conditions, to cut losses quickly.
-            - **Hold**: Hold only if profit < 5% AND loss > -0.5% (i.e., between -0.5% and +5%), but limit hold time to 1-2 hours max due to meme coin volatility.
-            - **No Momentum Analysis**: Ignore \`priceChange\`, volume, and liquidity trends; base decisions solely on profit/loss thresholds.
-            - **Strict Thresholds**: Do not recommend selling for profit < 5% gross (e.g., 4%) or holding past -0.5% loss.
+            - **Sell for Profit**: Sell if gross profit ≥ 5% (nets ≥4.5% after fees); do not sell below this.
+            - **Sell on Loss**: Sell if loss ≥ -2% AND momentum weak (m5 < 0%, h1 < 0%), or ≥ -5% regardless.
+            - **Hold**: Hold if profit < 5% AND loss > -2% with strong momentum (m5 > 5% OR h1 > 10%), max 1-2 hours.
+            - **Strict Thresholds**: No sell for profit < 5% or hold past -5% loss.
         
             Output in JSON:
             {
@@ -560,21 +567,21 @@ async function getGrokSellResponse(tokenData) {
                 "symbol": "symbol",
                 "address": "address",
                 "action": "SELL" | "HOLD",
-                "profit_loss_percent": "calculated profit/loss % (e.g., +5.3% or -0.6%)",
+                "profit_loss_percent": "calculated profit/loss % (e.g., +5.3% or -2.4%)",
                 "estimated_hold_time": "if HOLD, '1-2 hours'; null if SELL"
               },
-              "reasoning": "2-3 sentences explaining profit/loss and hold/sell rationale; flag if fees might exceed 0.21% for small trades",
+              "reasoning": "2-3 sentences explaining profit/loss, momentum, and rationale; flag if fees exceed 0.5% of trade value",
               "confidence": "0-1 score (e.g., 0.9 for SELL, 0.7 for HOLD)"
             }
         
-            Focus on achieving gross ≥5% profit to net a profit after Jupiter fees or cutting losses at ≥-0.5%; hold briefly between thresholds due to meme coin instability.
+            Focus on ≥5% gross profit to net ≥4.5% after fees; hold for pumps if momentum is strong, otherwise cut losses early.
           `
         }
       ],
       max_tokens: 300,
       temperature: 0.5
     });
-
+    // ... (rest of the function unchanged)
     let rawContent = completion.choices[0].message.content.trim();
     let jsonMatch = rawContent.match(/```json\s*([\s\S]*?)\s*```/);
     if (jsonMatch) rawContent = jsonMatch[1].trim();
@@ -588,23 +595,52 @@ async function getGrokSellResponse(tokenData) {
       if (possibleJsonMatch) return JSON.parse(possibleJsonMatch[0]);
       throw new Error("❌ No valid JSON found.");
     }
+ 
   } catch (error) {
     console.error("❌ Error fetching response:", error);
     return null;
   }
 }
 
+// async function checkBalance() {
+//   const balance = await connection.getBalance(keypair.publicKey);
+//   console.log(`✅ Wallet balance: ${balance / 1000000000} SOL`);
+//   // Calculate profit if initial balance is set
+//   if (initialBalance > 0) {
+//     totalProfit = Math.max(0, balance - initialBalance); // Profit is never negative
+//     console.log(`💰 Total profit: ${totalProfit / 1000000000} SOL`);
+//   }
+//   return balance / 1000000000;
+// }
+
+async function updateProfitInDb() {
+  await new Promise((resolve, reject) => {
+    db.query("UPDATE wallet_balance SET total_profit = ? WHERE wallet_address = ?", [totalProfit, fromAddress], (err) => {
+      if (err) reject(err);
+      else resolve();
+    });
+  });
+}
 
 async function checkBalance() {
-  const balance = await connection.getBalance(keypair.publicKey);
-  console.log(`✅ Wallet balance: ${balance / 1000000000} SOL`);
-  return balance / 1000000000;
+  const balance = await connection.getBalance(keypair.publicKey) / 1e9; // Convert to SOL
+  console.log(`✅ Wallet balance: ${balance} SOL`);
+  if (initialBalance > 0) {
+    totalProfit = balance - initialBalance >= 0 ? balance - initialBalance : totalProfit; // Only increase profit, don’t decrease below last known
+    console.log(`💰 Total profit: ${totalProfit} SOL`);
+    await updateProfitInDb();
+  }
+  return balance;
 }
 
 async function swapTokens(amount, outputToken,intraday, isSell = false, slippageBps = SLIPPAGE) {
   const action = isSell ? "Selling" : "Buying";
-console.log("slippageBps =>>>>,intraday",intraday);
+// console.log("slippageBps =>>>>,intraday",intraday);
   try {
+    const tradeValueUsd = isSell ? (intraday.recommendation.priceUsd * amount / 1e9) : (amount / 1e9 * 0.1); // Assume 0.1 SOL/USD for buy
+    // if (tradeValueUsd < 2) {
+    //   throw new Error(`Trade value $${tradeValueUsd.toFixed(2)} too small to net profit after $0.01 gas`);
+    // }
     bot.sendMessage(chatId, `🔄 ${action} token... Fetching swap details`);
 
     // Step 1: Fetch the quote
@@ -642,7 +678,7 @@ console.log("slippageBps =>>>>,intraday",intraday);
     // Step 4: Deserialize and sign the transaction
     const transaction = VersionedTransaction.deserialize(Buffer.from(swapData.swapTransaction, 'base64'));
     transaction.sign([keypair]);
-   console.log("transaction ====>>>",transaction)
+  //  console.log("transaction ====>>>",transaction)
     // Step 5: Send the transaction with retries and preflight
     const signature = await connection.sendRawTransaction(transaction.serialize(), {
       maxRetries: 5, // Increase retries
@@ -663,7 +699,14 @@ console.log("slippageBps =>>>>,intraday",intraday);
       throw new Error(`Transaction failed: ${JSON.stringify(confirmation.value.err)}`);
     }
     console.log("isSell ====>>",isSell)
+    let tradeProfit = 0;
 
+    if (isSell) {
+      const sellValue = amount * intraday.recommendation.priceUsd / 1e9; // Approx USD value sold
+      const buyValue = amount * intraday.recommendation.buy_price / 1e9; // Approx USD value bought
+      tradeProfit = sellValue - buyValue - 0.01; // Subtract gas fee
+      totalProfit += tradeProfit;
+    }
 
       if(isSell){
     bot.sendMessage(chatId, `✅ ${action} successful! Tx: https://solscan.io/tx/${signature},
@@ -699,13 +742,12 @@ console.log("slippageBps =>>>>,intraday",intraday);
     }
   })
 }else{
-  // await burnToken(fromAddress, outputToken, amount);
   
 }
 return signature;
   } catch (error) {
     console.error(`❌ Error during ${isSell ? 'sell' : 'swap'}:`, error.message);
-    bot.sendMessage(chatId, `❌ ${action} failed: ${error.message}`);
+    bot.sendMessage(chatId, `❌ ${action} failed: due to insufficient amount , need to burn`);
     throw error;
   }
 }
@@ -723,6 +765,35 @@ let isAutoTrading = false;
 let autoTradeInterval;
 
 // Start command handler
+// bot.onText(/\/start/, async (msg) => {
+//   if (msg.chat.id.toString() !== chatId) {
+//     bot.sendMessage(msg.chat.id, '❌ Unauthorized! You are not allowed to trade.');
+//     return;
+//   }
+
+//   if (isAutoTrading) {
+//     bot.sendMessage(chatId, '⚠️ Auto-trading is already running!');
+//     return;
+//   }
+
+//   try {
+//     isAutoTrading = true;
+//     bot.sendMessage(chatId, '🤖 Starting 24/7 auto-trading bot...');
+
+//     // Start parallel buy and sell loops
+//     autoBuyLoop();
+//      // Add delay between operations (e.g., 1 second)
+//      await new Promise(resolve => setTimeout(resolve, 1000));
+//     autoSellLoop();
+//      // Add delay before next cycles
+//      await new Promise(resolve => setTimeout(resolve, 1000));
+//   } catch (error) {
+//     console.error('Error starting auto-trade:', error);
+//     isAutoTrading = false;
+//     bot.sendMessage(chatId, '❌ Failed to start auto-trading');
+//   }
+// });
+
 bot.onText(/\/start/, async (msg) => {
   if (msg.chat.id.toString() !== chatId) {
     bot.sendMessage(msg.chat.id, '❌ Unauthorized! You are not allowed to trade.');
@@ -736,21 +807,76 @@ bot.onText(/\/start/, async (msg) => {
 
   try {
     isAutoTrading = true;
-    bot.sendMessage(chatId, '🤖 Starting 24/7 auto-trading bot...');
+    initialBalance = await checkBalance();
+    totalProfit = 0; // Reset profit at start
+    // Get current balance
+    // const currentBalance = await checkBalance();
+    
+    // Update balance in database
+    const updateBalanceQuery = `
+      UPDATE wallet_balance 
+      SET 
+        balance = ?,
+        last_updated = CURRENT_TIMESTAMP
+      WHERE wallet_address = ?
+    `;
 
-    // Start parallel buy and sell loops
-    // autoBuyLoop();
-     // Add delay between operations (e.g., 1 second)
-     await new Promise(resolve => setTimeout(resolve, 1000));
-    autoSellLoop();
-     // Add delay before next cycles
-     await new Promise(resolve => setTimeout(resolve, 1000));
+    // If no rows were updated, insert new record
+    const insertBalanceQuery = `
+      INSERT INTO wallet_balance (wallet_address, balance, last_updated)
+      SELECT ?, ?, CURRENT_TIMESTAMP
+      WHERE NOT EXISTS (
+        SELECT 1 FROM wallet_balance WHERE wallet_address = ?
+      )
+    `;
+    //  const balance = await checkBalance();
+    try {
+      // Use Promise wrapper for database operations
+      await new Promise((resolve, reject) => {
+        db.query(updateBalanceQuery, [initialBalance, fromAddress], (error, results) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+          
+          // If no rows were updated, insert new record
+          if (results.affectedRows === 0) {
+            db.query(insertBalanceQuery, [fromAddress, initialBalance, fromAddress], (insertError) => {
+              if (insertError) {
+                reject(insertError);
+                return;
+              }
+              resolve();
+            });
+          } else {
+            resolve();
+          }
+        });
+      });
+
+      bot.sendMessage(chatId, `🤖 Starting 24/7 auto-trading bot...\n💰 Current balance: ${initialBalance} SOL`);
+
+      // Start parallel buy and sell loops
+      autoBuyLoop();
+      // Add delay between operations
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      autoSellLoop();
+      // Add delay before next cycles
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
+    } catch (dbError) {
+      console.error('Database error:', dbError);
+      bot.sendMessage(chatId, '⚠️ Warning: Failed to update balance in database');
+      // Continue with bot startup despite DB error
+    }
+
   } catch (error) {
     console.error('Error starting auto-trade:', error);
     isAutoTrading = false;
     bot.sendMessage(chatId, '❌ Failed to start auto-trading');
   }
 });
+
 
 // Stop command handler
 bot.onText(/\/stop/, async (msg) => {
@@ -796,11 +922,20 @@ async function autoBuyLoop() {
         break;
       }
       
+      // const balance = await checkBalance();
+      // if (balance <= 0.001 || !isAutoTrading) {
+      //   if (!isAutoTrading) console.log('ℹ️ Stop requested, skipping buy operations');
+      //   else console.log('ℹ️ Insufficient balance for buying');
+      //   await sleep(5000); // Check more frequently when stopping
+      //   continue;
+      // }
+
       const balance = await checkBalance();
-      if (balance <= 0.001 || !isAutoTrading) {
+      const tradingBalance = Math.min(initialBalance, balance); // Use initial balance or current balance if lower
+      if (tradingBalance <= 0.020 || !isAutoTrading) { // Adjust threshold as needed
         if (!isAutoTrading) console.log('ℹ️ Stop requested, skipping buy operations');
-        else console.log('ℹ️ Insufficient balance for buying');
-        await sleep(5000); // Check more frequently when stopping
+        else  bot.sendMessage('ℹ️ Insufficient trading balance for buying');
+        await sleep(5000);
         continue;
       }
 
@@ -830,15 +965,17 @@ async function autoBuyLoop() {
       if (!isAutoTrading) {
         await sleep(1000); // Short sleep to allow for stop processing
       } else {
-        await sleep(30000); // Normal interval between operations
+        await sleep(1000); // Normal interval between operations
       }
     } catch (error) {
       console.error('Buy loop error:', error);
       if (isAutoTrading) {
         bot.sendMessage(chatId, '⚠️ Buy loop paused due to error');
       }
-      await sleep(5000); // Shorter wait on error when stopping
+      // Shorter wait on error when stopping
     }
+    await sleep(isAutoTrading ? 15000 : 1000);
+
   }
   
   console.log('Buy loop has stopped');
@@ -865,7 +1002,7 @@ async function sellWithRetry(fromAddress, tokenAddress, tokenOut, amount, initia
       // if (error.message.includes("No swap route available") || error.message.includes("COULD_NOT_FIND_ANY_ROUTE")) {
         if (attempt === 3) {
           // If all retries fail, burn the tokens
-          // if(amount<30000)
+          if(amount<300000)
           await burnToken(fromAddress, tokenAddress, amount);
 
           // failedTokens.add(tokenAddress);
@@ -1079,27 +1216,12 @@ async function autoSellLoop() {
       if (isAutoTrading) bot.sendMessage(chatId, '⚠️ Sell loop paused due to error');
       await sleep(5000);
     }
+    await sleep(isAutoTrading ? 10000 : 1000);
   }
 
   console.log('Sell loop has stopped');
   bot.sendMessage(chatId, '✅ Sell loop has stopped completely');
 }
-
-
-async function getTokenBalance(fromAddress, tokenMint) {
-  const tokenMintPubkey = new PublicKey(tokenMint);
-  const fromPubkey = new PublicKey(fromAddress);
-
-  const tokenAccount = await Token.getAssociatedTokenAddress(
-    TOKEN_PROGRAM_ID,
-    fromPubkey,
-    tokenMintPubkey
-  );
-
-  const balance = await connection.getTokenAccountBalance(tokenAccount);
-  return balance.value.uiAmount || 0;
-}
-
 
 
 async function burnToken(fromAddress, tokenAddress, amount) {
@@ -1341,9 +1463,42 @@ async function checkTokenTransferFee(mintAddress) {
     }
 }
 
-// Test with your token mint
-// const tokenMint = 'GmMautNDHVBsaxt2W38SMi2kqAgrG1HZJkHhdE7Ypump';
-// // checkTokenTransferFee(tokenMint);
+// Profit command handler
+bot.onText(/\/profit/, async (msg) => {
+  if (msg.chat.id.toString() !== chatId) {
+    bot.sendMessage(msg.chat.id, '❌ Unauthorized! You are not allowed to view profit.');
+    return;
+  }
+
+  try {
+    // Fetch the latest balance to ensure profit is up-to-date
+    const currentBalance = await checkBalance();
+    
+    // Retrieve total profit from the database (optional, if you want to ensure consistency)
+    const profitQuery = `SELECT total_profit FROM wallet_balance WHERE wallet_address = ?`;
+    const dbProfit = await new Promise((resolve, reject) => {
+      db.query(profitQuery, [fromAddress], (error, results) => {
+        if (error) reject(error);
+        else resolve(results[0]?.total_profit || 0);
+      });
+    });
+
+    // Use the in-memory totalProfit if it's higher (to account for recent trades not yet saved)
+    const displayedProfit = Math.max(totalProfit, dbProfit);
+
+    // Format the response
+    const profitMessage = `
+      💰 Total Profit: ${displayedProfit.toFixed(6)} SOL
+      📊 Current Balance: ${currentBalance.toFixed(6)} SOL
+      📅 As of: ${new Date().toLocaleString()}
+    `;
+    
+    bot.sendMessage(chatId, profitMessage);
+  } catch (error) {
+    console.error('Error fetching profit:', error);
+    bot.sendMessage(chatId, '❌ Failed to retrieve profit information');
+  }
+});
 
 // ✅ Telegram Bot Ready
 bot.on('polling_error', (error) => console.log('Telegram Error:', error.message));
